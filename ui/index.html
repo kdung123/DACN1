@@ -1,0 +1,1116 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VN30 · Training Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f5f6fa;--white:#fff;--border:#e4e6ef;--text:#1c1e2e;--muted:#8b90a7;
+  --blue:#2563eb;--blue-soft:#eff6ff;--green:#16a34a;--red:#dc2626;
+  --yellow:#d97706;--purple:#7c3aed;--purple-soft:#f5f3ff;--pink:#db2777;
+  --mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;
+  --radius:10px;--shadow:0 1px 3px rgba(0,0,0,.08);
+}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100vh}
+.shell{display:grid;grid-template-columns:260px 1fr;grid-template-rows:54px 1fr;height:100vh;overflow:hidden}
+header{grid-column:1/-1;background:var(--white);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;padding:0 20px;gap:12px}
+.logo{font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px}
+.logo-badge{background:var(--blue);color:#fff;font-size:11px;font-weight:700;
+  padding:2px 7px;border-radius:4px;letter-spacing:.5px}
+.sep{width:1px;height:20px;background:var(--border)}
+.subtitle{font-size:13px;color:var(--muted)}
+aside{background:var(--white);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;overflow-y:auto}
+aside::-webkit-scrollbar{width:3px}
+aside::-webkit-scrollbar-thumb{background:var(--border)}
+main{overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:14px}
+main::-webkit-scrollbar{width:5px}
+main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* sidebar panels */
+.panel{padding:12px 14px;border-bottom:1px solid var(--border)}
+.plabel{font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--muted);
+  text-transform:uppercase;margin-bottom:9px}
+#tickerSel{width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:7px;
+  font-family:var(--sans);font-size:14px;font-weight:600;background:var(--white);
+  cursor:pointer;color:var(--text);outline:none}
+#tickerSel:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+.ticker-quick{padding:10px 14px 4px;display:flex;flex-direction:column;gap:2px}
+.tq-price{font-family:var(--mono);font-size:21px;font-weight:600}
+.tq-price.up{color:var(--green)}.tq-price.down{color:var(--red)}
+.tq-chg{font-size:12px;font-weight:600}
+.tq-chg.up{color:var(--green)}.tq-chg.down{color:var(--red)}
+.tq-date{font-size:11px;color:var(--muted)}
+.chk-row{display:flex;align-items:center;gap:9px;padding:6px 8px;
+  border-radius:6px;cursor:pointer;transition:.1s}
+.chk-row:hover{background:var(--bg)}
+.chk-row input{width:14px;height:14px;accent-color:var(--blue);cursor:pointer}
+.chk-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.chk-label{font-size:13px;font-weight:500}
+.param-item{margin-bottom:10px}
+.param-item label{font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:3px}
+.param-item input[type=range]{width:100%;accent-color:var(--blue)}
+.pval{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--blue)}
+.btn-train{width:100%;padding:10px;background:var(--blue);color:#fff;border:none;
+  border-radius:8px;font-family:var(--sans);font-size:14px;font-weight:700;
+  cursor:pointer;transition:.15s;display:flex;align-items:center;justify-content:center;gap:8px}
+.btn-train:hover:not(:disabled){background:#1d4ed8}
+.btn-train:disabled{background:#9ca3af;cursor:not-allowed}
+.spinner{width:15px;height:15px;border:2px solid rgba(255,255,255,.3);
+  border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;display:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* cards */
+.card{background:var(--white);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
+.card-head{padding:13px 16px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ctitle{font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+.card-body{padding:12px 16px 16px}
+.rb-row{display:flex;gap:3px;margin-left:auto}
+.rb{padding:3px 10px;border:1px solid var(--border);border-radius:5px;font-size:12px;
+  font-weight:600;background:var(--white);cursor:pointer;color:var(--muted);transition:.1s}
+.rb:hover{border-color:var(--blue);color:var(--blue)}
+.rb.active{background:var(--blue);border-color:var(--blue);color:#fff}
+
+/* progress */
+.prog-row{display:flex;align-items:center;gap:10px;margin-bottom:7px}
+.prog-name{font-size:12px;font-weight:600;width:110px;flex-shrink:0}
+.prog-bg{flex:1;height:7px;background:var(--bg);border-radius:4px;overflow:hidden;border:1px solid var(--border)}
+.prog-fill{height:100%;border-radius:4px;transition:width .3s ease;width:0}
+.prog-pct{font-family:var(--mono);font-size:11px;width:32px;text-align:right;color:var(--muted)}
+.prog-st{font-size:13px;width:20px}
+
+/* console */
+.console{background:#0f1117;border-radius:8px;padding:10px 13px;
+  font-family:var(--mono);font-size:11.5px;line-height:1.7;color:#c9d1d9;
+  height:200px;overflow-y:auto;white-space:pre-wrap;margin-top:10px}
+.console::-webkit-scrollbar{width:4px}
+.console::-webkit-scrollbar-thumb{background:#30363d;border-radius:2px}
+.log-ok{color:#3fb950}.log-err{color:#f85149}.log-info{color:#58a6ff}
+
+/* results */
+.rc-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin-bottom:14px}
+.rc{border:2px solid var(--border);border-radius:9px;padding:11px;text-align:center;background:var(--bg)}
+.rc.best{border-color:var(--blue);background:var(--blue-soft)}
+.rc-name{font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;margin-bottom:3px}
+.rc-val{font-family:var(--mono);font-size:17px;font-weight:700;margin:2px 0}
+.rc-sub{font-size:10px;color:var(--muted)}
+.mtable{width:100%;border-collapse:collapse;font-size:13px}
+.mtable th{text-align:left;padding:7px 10px;font-size:10px;font-weight:700;
+  letter-spacing:.8px;text-transform:uppercase;color:var(--muted);
+  border-bottom:2px solid var(--border)}
+.mtable td{padding:8px 10px;border-bottom:1px solid #f1f3f7;vertical-align:middle}
+.mtable tr:last-child td{border-bottom:none}
+.mtable tr:hover td{background:#fafbff}
+.best-row td{background:var(--blue-soft)!important;font-weight:600}
+.best-row td:first-child{border-left:3px solid var(--blue)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.bw{display:flex;align-items:center;gap:7px}
+.mbar{flex:1;height:5px;background:var(--bg);border-radius:3px;overflow:hidden}
+.mfill{height:100%;border-radius:3px}
+.chk{color:var(--green);font-size:12px;margin-left:3px}
+
+/* Model toggle buttons */
+.model-tog{
+  display:flex;align-items:center;gap:6px;padding:6px 13px;
+  border:2px solid var(--border);border-radius:8px;
+  font-size:12px;font-weight:600;cursor:pointer;
+  background:var(--white);color:var(--muted);transition:.15s;
+  font-family:var(--sans);user-select:none;
+}
+.model-tog:hover{border-color:var(--mc,var(--blue));color:var(--text);
+  box-shadow:0 2px 8px rgba(0,0,0,.06)}
+.model-tog.active{
+  border-color:var(--mc,var(--blue));
+  background:var(--mc-bg,var(--blue-soft));
+  color:var(--text);
+  box-shadow:0 2px 8px rgba(0,0,0,.08);
+}
+.model-tog.solo-active{
+  border-width:2px;
+  box-shadow:0 0 0 3px var(--mc-bg,var(--blue-soft));
+}
+.tog-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;
+  transition:transform .15s}
+.model-tog.active .tog-dot{transform:scale(1.2)}
+.tog-rmse{font-size:10px;font-family:var(--mono);color:var(--muted);
+  margin-left:2px;font-weight:400}
+
+/* Chart mode bar */
+.chart-mode-bar{display:flex;gap:3px;background:var(--bg);
+  border-radius:7px;padding:3px;border:1px solid var(--border)}
+.cm-btn{padding:4px 11px;border:none;border-radius:5px;font-size:11px;
+  font-weight:600;cursor:pointer;background:none;color:var(--muted);transition:.12s}
+.cm-btn.active{background:var(--white);color:var(--text);
+  box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.hidden{display:none!important}
+.empty{text-align:center;padding:36px;color:var(--muted);font-size:13px}
+
+/* ── CRAWL TAB ── */
+.tab-bar{display:flex;border-bottom:2px solid var(--border);margin-bottom:16px}
+.tab-btn{padding:9px 18px;font-size:13px;font-weight:600;border:none;background:none;
+  cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-2px;transition:.15s}
+.tab-btn.active{color:var(--blue);border-bottom-color:var(--blue)}
+.tab-btn:hover{color:var(--text)}
+.tab-content{display:none}.tab-content.active{display:flex;flex-direction:column;gap:14px}
+
+/* Crawl ticker grid */
+.crawl-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:5px}
+.cg-item{padding:5px 4px;border:1px solid var(--border);border-radius:5px;
+  display:flex;align-items:center;gap:5px;cursor:pointer;transition:.1s;font-size:12px}
+.cg-item:hover{background:var(--bg)}
+.cg-item input{width:13px;height:13px;accent-color:var(--blue);cursor:pointer;flex-shrink:0}
+.cg-item label{cursor:pointer;font-weight:500;white-space:nowrap}
+
+/* Crawl progress list */
+.crawl-list{display:flex;flex-direction:column;gap:4px;max-height:260px;overflow-y:auto}
+.crawl-list::-webkit-scrollbar{width:3px}
+.crawl-list::-webkit-scrollbar-thumb{background:var(--border)}
+.cl-row{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;font-size:12px}
+.cl-row.done{background:#f0fdf4}.cl-row.error{background:#fef2f2}.cl-row.active{background:#eff6ff}
+.cl-ticker{font-weight:700;width:42px;flex-shrink:0}
+.cl-status{font-size:11px;flex:1;color:var(--muted)}
+.cl-rows{font-family:var(--mono);font-size:11px;color:var(--muted);width:60px;text-align:right}
+
+/* Overall crawl progress bar */
+.crawl-overall{height:8px;background:var(--bg);border-radius:4px;overflow:hidden;
+  border:1px solid var(--border);margin-bottom:8px}
+.crawl-overall-fill{height:100%;background:var(--blue);border-radius:4px;
+  transition:width .4s ease;width:0}
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header>
+  <div class="logo"><span class="logo-badge">VN30</span>Training Dashboard</div>
+  <div class="sep"></div>
+  <div class="subtitle">Dự báo giá cổ phiếu · ML &amp; Deep Learning</div>
+</header>
+
+<aside>
+  <div class="panel">
+    <div class="plabel">Mã cổ phiếu</div>
+    <select id="tickerSel" onchange="onTickerChange()"></select>
+  </div>
+  <div class="ticker-quick">
+    <div class="tq-price" id="tqPrice">—</div>
+    <div class="tq-chg"   id="tqChg">—</div>
+    <div class="tq-date"  id="tqDate">—</div>
+  </div>
+  <div class="panel">
+    <div class="plabel">Mô hình</div>
+    <div id="modelChecks"></div>
+  </div>
+  <div class="panel">
+    <div class="plabel">Hyperparameter</div>
+    <div class="param-item">
+      <label>Sequence length (LSTM/GRU)</label>
+      <input type="range" id="seqLen" min="5" max="120" value="30" step="5"
+             oninput="syncInput('seqLen','seqLenNum'); sv('seqLenV',this.value+' phiên')">
+      <div style="display:flex;align-items:center;gap:8px;margin-top:3px">
+        <span class="pval" id="seqLenV">30 phiên</span>
+        <span style="font-size:11px;color:var(--muted)">(</span>
+        <input type="number" id="seqLenNum" min="5" max="500" value="30"
+          oninput="syncSlider('seqLenNum','seqLen'); sv('seqLenV',this.value+' phiên')"
+          style="width:60px;padding:2px 6px;border:1px solid var(--border);border-radius:4px;
+          font-size:12px;font-family:var(--mono);color:var(--blue);font-weight:600">
+        <span style="font-size:11px;color:var(--muted)">phiên)</span>
+      </div>
+    </div>
+    <div class="param-item">
+      <label>Max Epochs (LSTM/BiGRU)</label>
+      <input type="range" id="epochs" min="10" max="300" value="50" step="10"
+             oninput="syncInput('epochs','epochsNum'); sv('epochsV',this.value+' epochs')">
+      <div style="display:flex;align-items:center;gap:8px;margin-top:3px">
+        <span class="pval" id="epochsV">50 epochs</span>
+        <span style="font-size:11px;color:var(--muted)">(</span>
+        <input type="number" id="epochsNum" min="1" max="9999" value="50"
+          oninput="syncSlider('epochsNum','epochs'); sv('epochsV',this.value+' epochs')"
+          style="width:60px;padding:2px 6px;border:1px solid var(--border);border-radius:4px;
+          font-size:12px;font-family:var(--mono);color:var(--blue);font-weight:600">
+        <span style="font-size:11px;color:var(--muted)">)</span>
+      </div>
+    </div>
+    <div class="param-item">
+      <label>Optuna Trials (RF/Ridge)</label>
+      <input type="range" id="nTrials" min="5" max="100" value="20" step="5"
+             oninput="syncInput('nTrials','nTrialsNum'); sv('nTrialsV',this.value+' trials')">
+      <div style="display:flex;align-items:center;gap:8px;margin-top:3px">
+        <span class="pval" id="nTrialsV">20 trials</span>
+        <span style="font-size:11px;color:var(--muted)">(</span>
+        <input type="number" id="nTrialsNum" min="5" max="9999" value="20"
+          oninput="syncSlider('nTrialsNum','nTrials'); sv('nTrialsV',this.value+' trials')"
+          style="width:60px;padding:2px 6px;border:1px solid var(--border);border-radius:4px;
+          font-size:12px;font-family:var(--mono);color:var(--blue);font-weight:600">
+        <span style="font-size:11px;color:var(--muted)">)</span>
+      </div>
+    </div>
+  </div>
+  <div class="panel" style="border-bottom:none;padding-bottom:16px">
+    <button class="btn-train" id="btnTrain" onclick="startTrain()">
+      <div class="spinner" id="spinner"></div>
+      <span id="btnLabel">▶ Bắt đầu Train</span>
+    </button>
+  </div>
+</aside>
+
+<main>
+
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="showTab('train',this)">🤖 Huấn luyện</button>
+  <button class="tab-btn"        onclick="showTab('crawl',this)">📡 Crawl Dữ liệu</button>
+</div>
+
+<!-- ══ TAB: HUẤN LUYỆN ══ -->
+<div class="tab-content active" id="tab-train">
+
+  <!-- Chart giá -->
+  <div class="card">
+    <div class="card-head">
+      <span class="ctitle">Giá đóng cửa lịch sử</span>
+      <div class="rb-row">
+        <button class="rb" onclick="setRange(60,this)">3T</button>
+        <button class="rb active" onclick="setRange(120,this)">6T</button>
+        <button class="rb" onclick="setRange(250,this)">1N</button>
+        <button class="rb" onclick="setRange(0,this)">Tất cả</button>
+      </div>
+    </div>
+    <div class="card-body"><div style="height:230px"><canvas id="priceChart"></canvas></div></div>
+  </div>
+
+  <!-- Tiến trình -->
+  <div class="card">
+    <div class="card-head"><span class="ctitle">Tiến trình huấn luyện</span></div>
+    <div class="card-body">
+      <div id="progWrap"><div class="empty">Chọn mô hình và bấm Train để bắt đầu</div></div>
+      <div class="console" id="console">Sẵn sàng...\n</div>
+    </div>
+  </div>
+
+  <!-- Chart dự báo — với model selector -->
+  <div class="card hidden" id="predCard">
+    <!-- Header -->
+    <div class="card-head" style="padding-bottom:12px;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:10px">
+      <div>
+        <div class="ctitle">Dự báo vs Thực tế — Tập Test</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px" id="predSubtitle"></div>
+      </div>
+      <!-- Chế độ xem -->
+      <div class="chart-mode-bar" style="margin-left:auto">
+        <button class="cm-btn active" id="modeAll"  onclick="setChartMode('all',this)">Tất cả</button>
+        <button class="cm-btn"        id="modeSolo" onclick="setChartMode('solo',this)">So sánh 1–1</button>
+      </div>
+    </div>
+
+    <!-- Toggle models -->
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border);
+      display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:10px;font-weight:700;color:var(--muted);
+        letter-spacing:1px;text-transform:uppercase;white-space:nowrap">Hiển thị:</span>
+
+      <!-- Actual toggle -->
+      <button class="model-tog active" id="tog_actual" onclick="toggleModel('actual',this)"
+        style="--mc:#1c1e2e;--mc-bg:#f3f4f6">
+        <span class="tog-dot" style="background:#1c1e2e"></span>Thực tế
+      </button>
+
+      <!-- Model toggles (built dynamically) -->
+      <div id="modelToggles" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+
+      <div style="display:flex;gap:4px;margin-left:auto">
+        <button onclick="toggleAllModels(true)"
+          style="font-size:11px;padding:4px 10px;border:1px solid var(--border);
+          border-radius:5px;background:none;cursor:pointer;color:var(--blue);font-weight:600">
+          Tất cả ✓
+        </button>
+        <button onclick="toggleAllModels(false)"
+          style="font-size:11px;padding:4px 10px;border:1px solid var(--border);
+          border-radius:5px;background:none;cursor:pointer;color:var(--muted)">
+          Ẩn hết
+        </button>
+      </div>
+    </div>
+
+    <!-- Chart -->
+    <div class="card-body" style="padding-top:14px">
+      <div style="position:relative;height:320px"><canvas id="predChart"></canvas></div>
+    </div>
+
+    <!-- Stats bar — hiện khi chọn 1 model -->
+    <div id="soloStats" style="display:none;padding:10px 16px 14px;
+      border-top:1px solid var(--border);display:none">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px" id="soloStatsGrid"></div>
+    </div>
+  </div>
+
+  <!-- Kết quả -->
+  <div class="card hidden" id="resCard">
+    <div class="card-head"><span class="ctitle">Kết quả so sánh mô hình</span>
+      <span style="font-size:11px;color:var(--muted);margin-left:8px">
+        Click card → xem riêng trên biểu đồ &nbsp;|&nbsp; Click lần 2 → hiện tất cả
+      </span>
+    </div>
+    <div class="card-body">
+      <div class="rc-grid" id="rcGrid"></div>
+      <table class="mtable">
+        <thead><tr>
+          <th>Mô hình</th><th>MAE ↓</th><th>RMSE ↓</th><th>MAPE % ↓</th><th>R² ↑</th>
+        </tr></thead>
+        <tbody id="mTbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- end tab-train -->
+
+<!-- ══ TAB: CRAWL ══ -->
+<div class="tab-content" id="tab-crawl">
+
+  <!-- Config card -->
+  <div class="card">
+    <div class="card-head"><span class="ctitle">Cấu hình crawl</span></div>
+    <div class="card-body" style="display:flex;flex-direction:column;gap:14px">
+
+      <!-- Source & Years -->
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end">
+        <div class="param-item" style="flex:1;min-width:150px">
+          <label>Nguồn dữ liệu</label>
+          <select id="crawlSource" style="width:100%;padding:7px 10px;border:1px solid var(--border);
+            border-radius:7px;font-size:14px;background:var(--white);color:var(--text);outline:none">
+            <option value="yfinance">Yahoo Finance (yfinance)</option>
+          </select>
+        </div>
+        <div class="param-item" style="flex:1;min-width:120px">
+          <label>Số năm lịch sử</label>
+          <input type="range" id="crawlYears" min="1" max="10" value="5" step="1"
+                 oninput="sv('crawlYearsV', this.value+' năm')">
+          <span class="pval" id="crawlYearsV">5 năm</span>
+        </div>
+      </div>
+
+      <!-- Ticker selector -->
+      <div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <span style="font-size:12px;font-weight:600;color:var(--muted)">CHỌN MÃ CỔ PHIẾU</span>
+          <button onclick="selectAllCrawl(true)"
+            style="font-size:11px;padding:3px 8px;border:1px solid var(--border);
+            border-radius:4px;background:none;cursor:pointer;color:var(--blue)">Tất cả</button>
+          <button onclick="selectAllCrawl(false)"
+            style="font-size:11px;padding:3px 8px;border:1px solid var(--border);
+            border-radius:4px;background:none;cursor:pointer;color:var(--muted)">Bỏ chọn</button>
+        </div>
+        <div class="crawl-grid" id="crawlGrid"></div>
+      </div>
+
+      <!-- Crawl button -->
+      <button class="btn-train" id="btnCrawl" onclick="startCrawl()"
+        style="background:var(--green)">
+        <div class="spinner" id="crawlSpinner"></div>
+        <span id="crawlBtnLabel">📡 Bắt đầu Crawl</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Progress card -->
+  <div class="card" id="crawlProgressCard">
+    <div class="card-head">
+      <span class="ctitle">Tiến trình</span>
+      <span style="font-size:11px;color:var(--muted);margin-left:auto" id="crawlSummary"></span>
+    </div>
+    <div class="card-body">
+      <div class="crawl-overall"><div class="crawl-overall-fill" id="crawlOverall"></div></div>
+      <div class="crawl-list" id="crawlList">
+        <div class="empty">Chưa có dữ liệu — bấm Crawl để bắt đầu</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="card">
+    <div class="card-head"><span class="ctitle">Log</span></div>
+    <div class="card-body">
+      <div class="console" id="crawlConsole">Sẵn sàng crawl...\n</div>
+    </div>
+  </div>
+
+</div><!-- end tab-crawl -->
+
+</main>
+</div>
+
+<script>
+const MODELS=[
+  {id:'AutoARIMA',     label:'Auto ARIMA',     color:'#d97706'},
+  {id:'Ridge(Optuna)', label:'Ridge (Optuna)', color:'#2563eb'},
+  {id:'RF(Optuna)',    label:'RF (Optuna)',    color:'#16a34a'},
+  {id:'LSTM+Attn',     label:'LSTM+Attention', color:'#7c3aed'},
+  {id:'BiGRU',         label:'BiGRU',          color:'#db2777'},
+  {id:'Ensemble',      label:'Ensemble',       color:'#0891b2'},
+];
+const SOFT={ARIMA:'#fffbeb',LinearReg:'#eff6ff',RandomForest:'#f0fdf4',LSTM:'#f5f3ff',GRU:'#fdf2f8'};
+
+const fmt  = v => Math.round(v).toLocaleString('vi-VN');
+const sv   = (id,v) => document.getElementById(id).textContent=v;
+
+// Slider ↔ number input đồng bộ 2 chiều
+function syncInput(sliderId, numberId) {
+  const num = document.getElementById(numberId);
+  if (num) num.value = document.getElementById(sliderId).value;
+}
+function syncSlider(numberId, sliderId) {
+  const slider = document.getElementById(sliderId);
+  const val    = parseInt(document.getElementById(numberId).value) || 0;
+  // Clamp slider về max của nó, nhưng fetch sẽ đọc từ number input nên không bị giới hạn
+  slider.value = Math.min(Math.max(val, parseInt(slider.min)), parseInt(slider.max));
+}
+
+// Override lấy giá trị — đọc từ number input nếu có (không bị giới hạn max slider)
+function getParamVal(sliderId, numberId) {
+  const num = document.getElementById(numberId);
+  return num ? (parseInt(num.value) || parseInt(document.getElementById(sliderId).value))
+             : parseInt(document.getElementById(sliderId).value);
+}
+
+let curTicker='VCB', curRange=120, tickerMeta={};
+let priceChart, predChart;
+let actualDates=[], actualVals=[], predData={};
+
+// ── init ─────────────────────────────────────────────────
+async function init(){
+  buildChecks();
+  await loadTickers();
+  loadPriceChart();
+}
+
+function buildChecks(){
+  document.getElementById('modelChecks').innerHTML=
+    MODELS.map(m=>`<label class="chk-row">
+      <input type="checkbox" id="chk_${m.id}" checked>
+      <span class="chk-dot" style="background:${m.color}"></span>
+      <span class="chk-label">${m.label}</span>
+    </label>`).join('');
+}
+
+// ── tickers ───────────────────────────────────────────────
+async function loadTickers(){
+  const list=await fetch('/api/tickers').then(r=>r.json()).catch(()=>[]);
+  const sel=document.getElementById('tickerSel');
+  list.forEach(t=>{
+    tickerMeta[t.ticker]=t;
+    const o=document.createElement('option');
+    o.value=t.ticker; o.textContent=t.ticker;
+    if(t.ticker===curTicker) o.selected=true;
+    sel.appendChild(o);
+  });
+  updateTQ();
+}
+
+function updateTQ(){
+  const d=tickerMeta[curTicker]; if(!d) return;
+  const up=d.change>=0;
+  document.getElementById('tqPrice').textContent=fmt(d.close);
+  document.getElementById('tqPrice').className='tq-price '+(up?'up':'down');
+  document.getElementById('tqChg').textContent=(up?'▲ +':'▼ ')+fmt(d.change)+' ('+d.pct.toFixed(2)+'%)';
+  document.getElementById('tqChg').className='tq-chg '+(up?'up':'down');
+  document.getElementById('tqDate').textContent=d.date;
+}
+
+function onTickerChange(){
+  curTicker=document.getElementById('tickerSel').value;
+  updateTQ(); loadPriceChart();
+  document.getElementById('predCard').classList.add('hidden');
+  document.getElementById('resCard').classList.add('hidden');
+  predData={}; actualDates=[]; actualVals=[];
+}
+
+// ── price chart ───────────────────────────────────────────
+async function loadPriceChart(){
+  const rows=await fetch(`/api/chart/${curTicker}?n=${curRange}`).then(r=>r.json()).catch(()=>[]);
+  if(!rows.length) return;
+  const labels=rows.map(r=>r.Date.slice(5));
+  const prices=rows.map(r=>r.Close);
+  const sma20=prices.map((_,i)=>i>=19?prices.slice(i-19,i+1).reduce((a,b)=>a+b)/20:null);
+  const ctx=document.getElementById('priceChart').getContext('2d');
+  const g=ctx.createLinearGradient(0,0,0,230);
+  g.addColorStop(0,'rgba(37,99,235,.13)'); g.addColorStop(1,'rgba(37,99,235,0)');
+  if(priceChart) priceChart.destroy();
+  priceChart=new Chart(ctx,{type:'line',data:{labels,datasets:[
+    {label:'Giá',data:prices,borderColor:'#2563eb',borderWidth:2,fill:true,backgroundColor:g,pointRadius:0,tension:.3},
+    {label:'SMA20',data:sma20,borderColor:'#f59e0b',borderWidth:1.5,fill:false,pointRadius:0,tension:.3,spanGaps:true,borderDash:[4,3]},
+  ]},options:{
+    responsive:true,maintainAspectRatio:false,animation:{duration:300},
+    interaction:{mode:'index',intersect:false},
+    plugins:{legend:{display:true,labels:{font:{size:11},boxWidth:12,color:'#8b90a7'}},
+      tooltip:{backgroundColor:'#fff',borderColor:'#e4e6ef',borderWidth:1,
+        titleColor:'#1c1e2e',bodyColor:'#8b90a7',padding:9,
+        callbacks:{label:c=>' '+c.dataset.label+': '+fmt(c.parsed.y)}}},
+    scales:{
+      x:{grid:{color:'#f1f3f7'},ticks:{color:'#8b90a7',font:{size:10},maxTicksLimit:8}},
+      y:{grid:{color:'#f1f3f7'},ticks:{color:'#8b90a7',font:{family:"'IBM Plex Mono',monospace",size:10},callback:v=>fmt(v)}},
+    }
+  }});
+}
+
+function setRange(n,btn){
+  curRange=n;
+  document.querySelectorAll('.rb').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  loadPriceChart();
+}
+
+// ── train ─────────────────────────────────────────────────
+function startTrain(){
+  const models=MODELS.filter(m=>document.getElementById('chk_'+m.id)?.checked).map(m=>m.id);
+  if(!models.length){alert('Chọn ít nhất 1 mô hình!');return;}
+
+  document.getElementById('btnTrain').disabled=true;
+  document.getElementById('spinner').style.display='block';
+  document.getElementById('btnLabel').textContent='Đang train...';
+  document.getElementById('predCard').classList.add('hidden');
+  document.getElementById('resCard').classList.add('hidden');
+  predData={}; actualDates=[]; actualVals=[];
+
+  // Build progress bars
+  document.getElementById('progWrap').innerHTML=
+    models.map(id=>{
+      const m=MODELS.find(x=>x.id===id);
+      return `<div class="prog-row">
+        <span class="prog-name" style="color:${m.color}">${m.label}</span>
+        <div class="prog-bg"><div class="prog-fill" id="pf_${id}" style="background:${m.color}"></div></div>
+        <span class="prog-pct" id="pp_${id}">0%</span>
+        <span class="prog-st"  id="ps_${id}">⏳</span>
+      </div>`;
+    }).join('');
+
+  document.getElementById('console').innerHTML='';
+
+  fetch('/api/train',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      ticker:curTicker, models,
+      seq_len:  getParamVal('seqLen',  'seqLenNum'),
+      epochs:   getParamVal('epochs',  'epochsNum'),
+      n_trials: getParamVal('nTrials', 'nTrialsNum'),
+    })
+  }).then(res=>{
+    const reader=res.body.getReader(), dec=new TextDecoder();
+    let buf='';
+    function pump(){
+      reader.read().then(({done,value})=>{
+        if(done){trainDone();return;}
+        buf+=dec.decode(value,{stream:true});
+        const lines=buf.split('\n'); buf=lines.pop();
+        lines.forEach(l=>{if(l.startsWith('data: ')){try{handle(JSON.parse(l.slice(6)))}catch{}}});
+        pump();
+      });
+    }
+    pump();
+  }).catch(e=>{log('❌ Lỗi: '+e,'err');trainDone();});
+}
+
+function log(msg,cls=''){
+  const c=document.getElementById('console');
+  const s=document.createElement('span');
+  if(cls) s.className='log-'+cls;
+  s.textContent=msg+'\n'; c.appendChild(s); c.scrollTop=c.scrollHeight;
+}
+
+function setProg(id,pct,done=false){
+  const f=document.getElementById('pf_'+id),
+        p=document.getElementById('pp_'+id),
+        s=document.getElementById('ps_'+id);
+  if(!f) return;
+  f.style.width=pct+'%'; p.textContent=pct+'%';
+  if(done||pct>=100){s.textContent='✓';s.style.color='var(--green)';}
+}
+
+function handle(ev){
+  if(ev.type==='log'){
+    const c=ev.msg.includes('✓')||ev.msg.startsWith('✅')?'ok':
+            ev.msg.includes('❌')||ev.msg.includes('⚠')?'err':
+            ev.msg.startsWith('[')?'info':'';
+    log(ev.msg,c);
+  } else if(ev.type==='progress'){
+    setProg(ev.model,ev.pct);
+  } else if(ev.type==='actual'){
+    actualDates=ev.dates; actualVals=ev.values;
+  } else if(ev.type==='done'){
+    ev.results.forEach(r=>setProg(r.model,100,true));
+    if(ev.predictions) predData=ev.predictions;
+    lastResults = ev.results;
+    renderPredChart(); renderResults(ev.results);
+  }
+}
+
+function trainDone(){
+  document.getElementById('btnTrain').disabled=false;
+  document.getElementById('spinner').style.display='none';
+  document.getElementById('btnLabel').textContent='▶ Bắt đầu Train';
+}
+
+// ════════════════════════════════════════════════════════
+//  PRED CHART STATE
+// ════════════════════════════════════════════════════════
+let visibleModels = new Set(['actual']);
+let chartMode     = 'all';   // 'all' | 'solo'
+let soloModel     = null;    // model id đang solo
+let lastResults   = [];      // lưu để show stats
+
+// ── Build toggle buttons ──────────────────────────────────
+function buildModelToggles() {
+  const avail = MODELS.filter(m => predData[m.id]);
+  const metricsMap = {};
+  lastResults.forEach(r => metricsMap[r.model] = r);
+
+  document.getElementById('modelToggles').innerHTML = avail.map(m => {
+    const r = metricsMap[m.id];
+    const rmseStr = r ? fmt(r.rmse) : '';
+    return `<button class="model-tog active" id="tog_${m.id}"
+      onclick="handleModelClick('${m.id}',this)"
+      style="--mc:${m.color};--mc-bg:${hexToRgba(m.color,0.09)}">
+      <span class="tog-dot" style="background:${m.color}"></span>
+      ${m.label}
+      ${rmseStr ? `<span class="tog-rmse">RMSE ${rmseStr}</span>` : ''}
+    </button>`;
+  }).join('');
+
+  visibleModels = new Set(['actual', ...avail.map(m => m.id)]);
+
+  // Subtitle
+  const testLen = actualDates.length;
+  document.getElementById('predSubtitle').textContent =
+    `${testLen} phiên test · ${avail.length} mô hình · bấm để ẩn/hiện`;
+}
+
+// ── Click handler — toggle hoặc solo ────────────────────
+function handleModelClick(id, btn) {
+  if (chartMode === 'solo') {
+    // Solo mode: click = xem riêng mô hình này
+    soloModel = soloModel === id ? null : id;
+    applySolo();
+    return;
+  }
+  // All mode: toggle on/off
+  toggleModel(id, btn);
+}
+
+function toggleModel(id, btn) {
+  if (visibleModels.has(id)) {
+    if (visibleModels.size <= 1) return; // giữ ít nhất 1
+    visibleModels.delete(id);
+    btn.classList.remove('active');
+  } else {
+    visibleModels.add(id);
+    btn.classList.add('active');
+  }
+  updateChartVisibility();
+}
+
+function toggleAllModels(show) {
+  MODELS.filter(m => predData[m.id]).forEach(m => {
+    const btn = document.getElementById('tog_' + m.id);
+    if (show) { visibleModels.add(m.id); btn?.classList.add('active'); }
+    else       { visibleModels.delete(m.id); btn?.classList.remove('active'); }
+  });
+  if (!show) visibleModels.add('actual');
+  updateChartVisibility();
+}
+
+// ── Chart mode: all / solo ───────────────────────────────
+function setChartMode(mode, btn) {
+  chartMode = mode;
+  document.querySelectorAll('.cm-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+
+  if (mode === 'solo') {
+    // Default: solo xem model đầu tiên
+    const first = MODELS.find(m => predData[m.id]);
+    if (first) { soloModel = first.id; applySolo(); }
+  } else {
+    soloModel = null;
+    // Restore all visible
+    toggleAllModels(true);
+    document.getElementById('soloStats').style.display = 'none';
+    // Reset toggle button styles
+    document.querySelectorAll('.model-tog').forEach(b => b.classList.remove('solo-active'));
+  }
+}
+
+function applySolo() {
+  if (!predChart) return;
+
+  // Update toggle button highlights
+  document.querySelectorAll('.model-tog').forEach(b => b.classList.remove('solo-active', 'active'));
+  if (soloModel) {
+    document.getElementById('tog_actual')?.classList.add('active');
+    document.getElementById('tog_' + soloModel)?.classList.add('active', 'solo-active');
+  } else {
+    // No solo → show all
+    toggleAllModels(true);
+    document.getElementById('soloStats').style.display = 'none';
+    return;
+  }
+
+  // Hide all except actual + soloModel
+  predChart.data.datasets.forEach(ds => {
+    const id = ds._modelId;
+    ds.hidden = !(id === 'actual' || id === soloModel);
+  });
+  predChart.update('none');
+
+  // Show stats for solo model
+  const r = lastResults.find(x => x.model === soloModel);
+  const m = MODELS.find(x => x.id === soloModel);
+  if (r && m) {
+    document.getElementById('soloStats').style.display = 'block';
+    document.getElementById('soloStatsGrid').innerHTML = [
+      { label: 'MAE',  val: fmt(r.mae),        unit: 'VNĐ',  color: m.color },
+      { label: 'RMSE', val: fmt(r.rmse),        unit: 'VNĐ',  color: m.color },
+      { label: 'MAPE', val: r.mape.toFixed(2),  unit: '%',    color: r.mape < 2 ? 'var(--green)' : r.mape < 5 ? 'var(--yellow)' : 'var(--red)' },
+      { label: 'R²',   val: r.r2.toFixed(4),    unit: '',     color: r.r2 > 0.9 ? 'var(--green)' : r.r2 > 0.5 ? 'var(--blue)' : 'var(--red)' },
+    ].map(s => `
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;
+        padding:10px 12px;text-align:center">
+        <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted);
+          text-transform:uppercase;margin-bottom:4px">${s.label}</div>
+        <div style="font-size:18px;font-weight:800;font-family:var(--mono);color:${s.color}">
+          ${s.val}<span style="font-size:12px;font-weight:500;margin-left:2px">${s.unit}</span>
+        </div>
+      </div>`).join('');
+  }
+}
+
+// ── Visibility sync ──────────────────────────────────────
+function updateChartVisibility() {
+  if (!predChart) return;
+  predChart.data.datasets.forEach(ds => {
+    ds.hidden = !visibleModels.has(ds._modelId);
+  });
+  predChart.update('none');
+}
+
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// ── Render chart ─────────────────────────────────────────
+function renderPredChart() {
+  if (!actualDates.length) return;
+  document.getElementById('predCard').classList.remove('hidden');
+  buildModelToggles();
+
+  const datasets = [{
+    label: 'Thực tế', _modelId: 'actual',
+    data: actualVals,
+    borderColor: '#1c1e2e', borderWidth: 2.5,
+    pointRadius: 0, tension: .3, fill: false,
+    order: 0, hidden: false,
+  }];
+
+  Object.entries(predData).forEach(([id, pd]) => {
+    const m = MODELS.find(x => x.id === id); if (!m) return;
+    const n = Math.min(actualVals.length, pd.values.length);
+    datasets.push({
+      label: m.label, _modelId: id,
+      data: pd.values.slice(-n),
+      borderColor: m.color, borderWidth: 1.8,
+      backgroundColor: hexToRgba(m.color, 0.05),
+      pointRadius: 0, tension: .3, fill: false,
+      borderDash: [5, 3], order: 1, hidden: false,
+    });
+  });
+
+  const labels = actualDates.slice(-datasets[0].data.length).map(d => d.slice(5));
+
+  if (predChart) predChart.destroy();
+  predChart = new Chart(document.getElementById('predChart').getContext('2d'), {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration: 350 },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#fff', borderColor: '#e4e6ef', borderWidth: 1,
+          titleColor: '#1c1e2e', bodyColor: '#8b90a7', padding: 11,
+          filter: item => !item.dataset.hidden,
+          callbacks: {
+            title: items => items[0]?.label ? '📅 ' + items[0].label : '',
+            label: c => c.dataset.hidden ? null
+              : '  ' + c.dataset.label + ': ' + fmt(c.parsed.y) + ' VNĐ',
+          }
+        }
+      },
+      scales: {
+        x: { grid: { color: '#f1f3f7' },
+             ticks: { color: '#8b90a7', font: { size: 10 }, maxTicksLimit: 10 } },
+        y: { grid: { color: '#f1f3f7' },
+             ticks: { color: '#8b90a7',
+               font: { family: "'IBM Plex Mono',monospace", size: 10 },
+               callback: v => fmt(v) } },
+      }
+    }
+  });
+}
+
+// ── results ───────────────────────────────────────────────
+function renderResults(results) {
+  if (!results.length) return;
+  document.getElementById('resCard').classList.remove('hidden');
+  const sorted = [...results].sort((a, b) => a.rmse - b.rmse);
+  const best   = sorted[0];
+  const maxMAE  = Math.max(...results.map(r => r.mae));
+  const maxRMSE = Math.max(...results.map(r => r.rmse));
+  const maxMAPE = Math.max(...results.map(r => r.mape));
+  const maxR2   = Math.max(...results.map(r => r.r2 ?? -Infinity));
+  const bMAE    = Math.min(...results.map(r => r.mae));
+  const bRMSE   = Math.min(...results.map(r => r.rmse));
+  const bMAPE   = Math.min(...results.map(r => r.mape));
+  const bR2     = Math.max(...results.map(r => r.r2 ?? -Infinity));
+  const r2Color = v => v === null ? '#8b90a7'
+    : v >= 0.9 ? '#16a34a' : v >= 0.7 ? '#2563eb'
+    : v >= 0.5 ? '#d97706' : v >= 0 ? '#dc2626' : '#9f1239';
+
+  // Summary cards — bấm để toggle model trên chart
+  document.getElementById('rcGrid').innerHTML =
+    MODELS.filter(m => results.find(r => r.model === m.id)).map(m => {
+      const r   = results.find(x => x.model === m.id);
+      const isB = r.model === best.model;
+      const r2v = r.r2 ?? null;
+      return `<div class="rc ${isB ? 'best' : ''}"
+        style="cursor:pointer;${isB ? '' : 'border-color:' + m.color + '44'}"
+        id="rc_${m.id}"
+        onclick="toggleFromCard('${m.id}')"
+        title="Bấm để hiện/ẩn trên biểu đồ">
+        <div class="rc-name" style="color:${m.color}">${m.label}</div>
+        <div class="rc-val" style="color:${isB ? 'var(--blue)' : m.color}">${fmt(r.rmse)}</div>
+        <div class="rc-sub">RMSE</div>
+        <div style="margin-top:5px;font-size:11px;font-family:var(--mono);font-weight:700;color:${r2Color(r2v)}">
+          R² ${r2v !== null ? r2v.toFixed(4) : '—'}
+        </div>
+        ${isB ? '<span style="font-size:9px;background:var(--blue);color:#fff;padding:1px 5px;border-radius:3px;display:inline-block;margin-top:4px">BEST ★</span>' : ''}
+        <div style="margin-top:6px;font-size:10px;color:var(--muted)" id="rcvis_${m.id}">👁 Đang hiển thị</div>
+      </div>`;
+    }).join('');
+
+  // Metrics table — bấm hàng để toggle
+  document.getElementById('mTbody').innerHTML = sorted.map(r => {
+    const m   = MODELS.find(x => x.id === r.model);
+    const isB = r.model === best.model;
+    const r2v = r.r2 ?? null;
+    const r2BarW = r2v !== null ? Math.max(0, r2v) / Math.max(0.001, maxR2) * 100 : 0;
+    return `<tr class="${isB ? 'best-row' : ''}" style="cursor:pointer"
+      id="tr_${m.id}" onclick="toggleFromCard('${m.id}')" title="Bấm để hiện/ẩn trên biểu đồ">
+      <td>
+        <span class="dot" style="background:${m.color}"></span>
+        <strong>${m.label}</strong>
+        ${isB ? '<span style="font-size:9px;background:var(--blue);color:#fff;padding:1px 5px;border-radius:3px;margin-left:6px">BEST</span>' : ''}
+        <span style="font-size:10px;color:var(--muted);margin-left:6px" id="trvis_${m.id}">👁</span>
+      </td>
+      <td><div class="bw"><span style="font-family:var(--mono);min-width:65px">${fmt(r.mae)}</span>
+          <div class="mbar"><div class="mfill" style="width:${r.mae / maxMAE * 100}%;background:${m.color}55"></div></div>
+          ${r.mae === bMAE ? '<span class="chk">✓</span>' : ''}</div></td>
+      <td><div class="bw"><span style="font-family:var(--mono);min-width:65px">${fmt(r.rmse)}</span>
+          <div class="mbar"><div class="mfill" style="width:${r.rmse / maxRMSE * 100}%;background:${m.color}55"></div></div>
+          ${r.rmse === bRMSE ? '<span class="chk">✓</span>' : ''}</div></td>
+      <td><div class="bw"><span style="font-family:var(--mono);min-width:50px">${r.mape.toFixed(2)}%</span>
+          <div class="mbar"><div class="mfill" style="width:${r.mape / maxMAPE * 100}%;background:${m.color}55"></div></div>
+          ${r.mape === bMAPE ? '<span class="chk">✓</span>' : ''}</div></td>
+      <td><div class="bw">
+          <span style="font-family:var(--mono);min-width:52px;color:${r2Color(r2v)};font-weight:${isB ? 700 : 500}">
+            ${r2v !== null ? r2v.toFixed(4) : '—'}
+          </span>
+          <div class="mbar"><div class="mfill" style="width:${r2BarW}%;background:${r2Color(r2v)}55"></div></div>
+          ${r2v === bR2 && r2v !== null ? '<span class="chk">✓</span>' : ''}
+      </div></td>
+    </tr>`;
+  }).join('');
+}
+
+// Toggle model từ card/table row — đồng bộ với toggle buttons trên chart
+function toggleFromCard(modelId) {
+  if (chartMode === 'solo') {
+    // Solo mode: click card = solo model này
+    soloModel = soloModel === modelId ? null : modelId;
+    applySolo();
+    // Scroll lên chart
+    document.getElementById('predCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } else {
+    // All mode: toggle hiện/ẩn
+    const btn = document.getElementById('tog_' + modelId);
+    if (btn) toggleModel(modelId, btn);
+    else {
+      if (visibleModels.has(modelId)) visibleModels.delete(modelId);
+      else visibleModels.add(modelId);
+      updateChartVisibility();
+    }
+  }
+  syncVisualState();
+}
+
+function syncVisualState() {
+  MODELS.forEach(m => {
+    const vis    = chartMode === 'solo'
+                 ? (m.id === soloModel || soloModel === null)
+                 : visibleModels.has(m.id);
+    const rcVis  = document.getElementById('rcvis_' + m.id);
+    const trVis  = document.getElementById('trvis_' + m.id);
+    const rcCard = document.getElementById('rc_' + m.id);
+    const trRow  = document.getElementById('tr_' + m.id);
+    const isSolo = chartMode === 'solo' && m.id === soloModel;
+
+    if (rcVis) {
+      rcVis.textContent = isSolo ? '🔍 Đang xem riêng'
+                        : vis    ? '👁 Đang hiển thị'
+                                 : '🚫 Đang ẩn';
+      rcVis.style.color = isSolo ? 'var(--blue)' : vis ? 'var(--green)' : 'var(--muted)';
+    }
+    if (trVis)  trVis.textContent  = isSolo ? '🔍' : vis ? '👁' : '🚫';
+    if (rcCard) rcCard.style.opacity = vis ? '1' : '0.4';
+    if (rcCard) rcCard.style.transform = isSolo ? 'scale(1.03)' : 'scale(1)';
+    if (trRow)  trRow.style.opacity  = vis ? '1' : '0.45';
+  });
+}
+
+// ════════════════════════════════════════════════════════
+//  TAB SWITCHER
+// ════════════════════════════════════════════════════════
+function showTab(id, btn) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  if (btn) btn.classList.add('active');
+}
+
+// ════════════════════════════════════════════════════════
+//  CRAWL TICKER GRID
+// ════════════════════════════════════════════════════════
+const ALL_TICKERS = [
+  'ACB','BCM','BID','BVH','CTG','FPT','GAS','GVR','HDB','HPG',
+  'MBB','MSN','MWG','PLX','POW','REE','SAB','SHB','SSB','SSI',
+  'STB','TCB','TPB','VCB','VHM','VIB','VIC','VJC','VNM','VPB',
+];
+
+function buildCrawlGrid() {
+  document.getElementById('crawlGrid').innerHTML = ALL_TICKERS.map(t => `
+    <div class="cg-item">
+      <input type="checkbox" id="cc_${t}" checked>
+      <label for="cc_${t}">${t}</label>
+    </div>`).join('');
+}
+
+function selectAllCrawl(val) {
+  ALL_TICKERS.forEach(t => {
+    const el = document.getElementById('cc_' + t);
+    if (el) el.checked = val;
+  });
+}
+
+function getSelectedCrawlTickers() {
+  return ALL_TICKERS.filter(t => document.getElementById('cc_' + t)?.checked);
+}
+
+// ════════════════════════════════════════════════════════
+//  CRAWL — start & stream
+// ════════════════════════════════════════════════════════
+function startCrawl() {
+  const tickers = getSelectedCrawlTickers();
+  if (!tickers.length) { alert('Chọn ít nhất 1 mã!'); return; }
+
+  document.getElementById('btnCrawl').disabled = true;
+  document.getElementById('crawlSpinner').style.display = 'block';
+  document.getElementById('crawlBtnLabel').textContent = 'Đang crawl...';
+  document.getElementById('crawlOverall').style.width = '0%';
+  document.getElementById('crawlSummary').textContent = `0 / ${tickers.length}`;
+  document.getElementById('crawlConsole').innerHTML = '';
+
+  document.getElementById('crawlList').innerHTML = tickers.map(t => `
+    <div class="cl-row" id="clr_${t}">
+      <span class="cl-ticker">${t}</span>
+      <span class="cl-status" id="cls_${t}">Chờ...</span>
+      <span class="cl-rows"   id="clr2_${t}"></span>
+    </div>`).join('');
+
+  fetch('/api/crawl', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      tickers,
+      years:  parseInt(document.getElementById('crawlYears').value),
+      source: document.getElementById('crawlSource').value,
+    }),
+  }).then(res => {
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = '';
+    function pump() {
+      reader.read().then(({ done, value }) => {
+        if (done) { crawlDone(); return; }
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n'); buf = lines.pop();
+        lines.forEach(l => {
+          if (l.startsWith('data: ')) { try { handleCrawlEv(JSON.parse(l.slice(6))); } catch {} }
+        });
+        pump();
+      });
+    }
+    pump();
+  }).catch(e => { crawlLog('❌ Lỗi: ' + e); crawlDone(); });
+}
+
+function handleCrawlEv(ev) {
+  if (ev.type === 'log') {
+    crawlLog(ev.msg);
+  } else if (ev.type === 'crawl_progress') {
+    const { index, total, ticker, status, rows } = ev;
+    const pct = Math.round(index / total * 100);
+    document.getElementById('crawlOverall').style.width = pct + '%';
+    document.getElementById('crawlSummary').textContent = `${index} / ${total}`;
+    const row = document.getElementById('clr_'  + ticker);
+    const st  = document.getElementById('cls_'  + ticker);
+    const rw  = document.getElementById('clr2_' + ticker);
+    if (!row) return;
+    row.className = 'cl-row ' + (status==='done'?'done':status==='error'?'error':status==='downloading'?'active':'');
+    st.textContent = status==='done'?'✓ Thành công':status==='error'?'✗ Lỗi':'⬇ Đang tải...';
+    st.style.color = status==='done'?'var(--green)':status==='error'?'var(--red)':'var(--blue)';
+    if (rows) rw.textContent = rows.toLocaleString('vi-VN') + ' phiên';
+    row.scrollIntoView({ block: 'nearest' });
+  } else if (ev.type === 'crawl_done') {
+    document.getElementById('crawlOverall').style.width = '100%';
+    document.getElementById('crawlSummary').textContent =
+      `✅ ${ev.success.length} thành công` + (ev.failed.length ? ` · ❌ ${ev.failed.length} lỗi` : '');
+    crawlDone();
+    // Reload ticker list nếu đang ở tab train
+    loadTickers();
+  }
+}
+
+function crawlLog(msg) {
+  const c = document.getElementById('crawlConsole');
+  const s = document.createElement('span');
+  if (msg.includes('✓')||msg.includes('✅')) s.className='log-ok';
+  else if (msg.includes('⚠')||msg.includes('❌')||msg.includes('✗')) s.className='log-err';
+  else if (msg.startsWith('📡')||msg.startsWith('🚀')||msg.startsWith('[')||msg.includes('Bắt đầu')) s.className='log-info';
+  s.textContent = msg + '\n';
+  c.appendChild(s); c.scrollTop = c.scrollHeight;
+}
+
+function crawlDone() {
+  document.getElementById('btnCrawl').disabled = false;
+  document.getElementById('crawlSpinner').style.display = 'none';
+  document.getElementById('crawlBtnLabel').textContent = '📡 Bắt đầu Crawl';
+}
+
+init();
+buildCrawlGrid();
+</script>
+</body>
+</html>
