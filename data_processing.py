@@ -125,19 +125,25 @@ def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
     for lag in config.LAG_WINDOWS:
         df[f"Lag_{lag}"] = df[target].shift(lag)
 
-    # ── Moving Averages ───────────────────────────────────────
-    for w in config.MA_WINDOWS:
-        df[f"SMA_{w}"] = df[target].rolling(w).mean()
-        df[f"EMA_{w}"] = df[target].ewm(span=w, adjust=False).mean()
+    # close_lag: Close.shift(1) — dùng cho TẤT CẢ features
+    # Đảm bảo tại ngày T, model không thấy Close(T) trong bất kỳ feature nào
+    close_lag = df[target].shift(1)
 
-    # ── RSI (14) ─────────────────────────────────────────────
-    delta        = df[target].diff()
+    # ── Moving Averages (tính từ close_lag) ──────────────────
+    # SMA_20(T) = mean(Close[T-20:T-1]) — không có Close(T)
+    for w in config.MA_WINDOWS:
+        df[f"SMA_{w}"] = close_lag.rolling(w).mean()
+        df[f"EMA_{w}"] = close_lag.ewm(span=w, adjust=False).mean()
+
+    # ── RSI 14 (tính từ close_lag) ───────────────────────────
+    # delta(T) = Close(T-1) - Close(T-2) — không có Close(T)
+    delta        = close_lag.diff()
     gain         = delta.clip(lower=0).rolling(config.RSI_PERIOD).mean()
     loss         = (-delta.clip(upper=0)).rolling(config.RSI_PERIOD).mean()
     df["RSI"]    = 100 - (100 / (1 + gain / (loss + 1e-9)))
 
-    # ── Bollinger Bands — shift(1) tránh leak Close(T) ───────
-    close_lag    = df[target].shift(1)
+    # ── Bollinger Bands (tính từ close_lag) ──────────────────
+    # rolling(20) trên close_lag → window = Close[T-20:T-1]
     mid          = close_lag.rolling(config.BB_PERIOD).mean()
     std          = close_lag.rolling(config.BB_PERIOD).std()
     df["BB_Upper"] = mid + config.BB_STD * std
@@ -145,9 +151,10 @@ def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
     df["BB_Width"] = df["BB_Upper"] - df["BB_Lower"]
     df["BB_Pct"]   = (close_lag - df["BB_Lower"]) / (df["BB_Width"] + 1e-9)
 
-    # ── Returns & Volatility ──────────────────────────────────
-    df["Return_1d"]  = df[target].pct_change(1)
-    df["Return_5d"]  = df[target].pct_change(5)
+    # ── Returns & Volatility (tính từ close_lag) ─────────────
+    # Return_1d(T) = (Close(T-1) - Close(T-2)) / Close(T-2)
+    df["Return_1d"]  = close_lag.pct_change(1)
+    df["Return_5d"]  = close_lag.pct_change(5)
     df["Volatility"] = df["Return_1d"].rolling(10).std()
 
     # ── OHLC ngày T-1 (shift = không leak) ───────────────────

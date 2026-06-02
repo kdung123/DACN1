@@ -118,10 +118,12 @@ def api_train():
             log("      ✓ Xong")
 
             log("[5/5] Huấn luyện: Ridge | RF | BiGRU | Ensemble...")
-            results     = {}   # model_id → metrics dict
-            predictions = {}   # model_id → {dates, values}
+            results       = {}   # model_id → metrics dict
+            predictions   = {}   # model_id → {dates, values} trên TEST
+            trained_models = {}  # model_id → fitted model object (dùng cho Ensemble)
+            val_preds     = {}   # model_id → np.ndarray pred trên VAL
 
-            # DL sequences
+            # ── Chuẩn bị sequences cho DL ─────────────────
             dl_ready = False
             if any(m in models for m in ["BiGRU", "Ensemble"]):
                 Xs_tr, ys_tr = dp.make_sequences(X_train, y_train, seq_len)
@@ -131,28 +133,36 @@ def api_train():
                 td_seq       = test_dates[seq_len:]
                 dl_ready     = len(Xs_tr) >= 10
 
+            y_val_real = val[target].values
 
-            # ── 2. RIDGE (OPTUNA) ──────────────────────────
+            # ── Ridge (Optuna) ─────────────────────────────
             if "Ridge(Optuna)" in models:
                 mid = "Ridge(Optuna)"
-                log(f"\n  → {mid}: Optuna tìm alpha tốt nhất ({n_trials} trials)...")
+                log(f"\n  → {mid}: Optuna tìm alpha ({n_trials} trials)...")
                 progress(mid, 5)
                 try:
                     model, best_alpha = mi.train_ridge_optuna(
                         X_train, y_train, X_val, y_val,
-                        n_trials=n_trials,
-                        send_log=lambda m: log(m)
+                        n_trials=n_trials, send_log=lambda m: log(m)
                     )
+                    # Test prediction
                     pred = scaler_y.inverse_transform(
                         model.predict(X_test).reshape(-1, 1)).ravel()
+                    # Val prediction — dùng để tìm Ensemble weights
+                    vp = scaler_y.inverse_transform(
+                        model.predict(X_val).reshape(-1, 1)).ravel()
+
                     r = _make_result(mid, y_test_real, pred, test_dates)
-                    results[mid] = r; predictions[mid] = {"dates": test_dates, "values": [round(float(v)) for v in pred]}
+                    results[mid] = r
+                    predictions[mid]    = {"dates": test_dates, "values": [round(float(v)) for v in pred]}
+                    trained_models[mid] = model
+                    val_preds[mid]      = vp
                     progress(mid, 100)
                     log(f"    ✓ {mid}  alpha={best_alpha:.4f}  " + _fmt_metrics(r))
                 except Exception as e:
                     log(f"    ⚠ {mid} lỗi: {e}")
 
-            # ── 3. RANDOM FOREST (OPTUNA) ──────────────────
+            # ── Random Forest (Optuna) ─────────────────────
             if "RF(Optuna)" in models:
                 mid = "RF(Optuna)"
                 log(f"\n  → {mid}: Optuna tìm hyperparameters ({n_trials} trials)...")
@@ -160,19 +170,24 @@ def api_train():
                 try:
                     model, bp = mi.train_rf_optuna(
                         X_train, y_train, X_val, y_val,
-                        n_trials=n_trials,
-                        send_log=lambda m: log(m)
+                        n_trials=n_trials, send_log=lambda m: log(m)
                     )
                     pred = scaler_y.inverse_transform(
                         model.predict(X_test).reshape(-1, 1)).ravel()
+                    vp = scaler_y.inverse_transform(
+                        model.predict(X_val).reshape(-1, 1)).ravel()
+
                     r = _make_result(mid, y_test_real, pred, test_dates)
-                    results[mid] = r; predictions[mid] = {"dates": test_dates, "values": [round(float(v)) for v in pred]}
+                    results[mid] = r
+                    predictions[mid]    = {"dates": test_dates, "values": [round(float(v)) for v in pred]}
+                    trained_models[mid] = model
+                    val_preds[mid]      = vp
                     progress(mid, 100)
-                    log(f"    ✓ {mid}  {bp}  " + _fmt_metrics(r))
+                    log(f"    ✓ {mid}  depth={bp['max_depth']}  leaf={bp['min_samples_leaf']}  " + _fmt_metrics(r))
                 except Exception as e:
                     log(f"    ⚠ {mid} lỗi: {e}")
 
-            # ── 4. BIDIRECTIONAL GRU ───────────────────────
+            # ── Bidirectional GRU ──────────────────────────
             if "BiGRU" in models and dl_ready:
                 mid = "BiGRU"
                 log(f"\n  → {mid}: Bidirectional GRU...")
@@ -188,40 +203,56 @@ def api_train():
                          train_loss=hist.history.get("loss", []),
                          val_loss=hist.history.get("val_loss", []),
                          stopped_epoch=len(hist.history.get("loss", [])))
+
                     pred = scaler_y.inverse_transform(
                         model.predict(Xs_te, verbose=0)).ravel()
+                    vp = scaler_y.inverse_transform(
+                        model.predict(Xs_vl, verbose=0)).ravel()
+
                     r = _make_result(mid, y_te_seq, pred, td_seq)
                     results[mid] = r
-                    predictions[mid] = {"dates": td_seq, "values": [round(float(v)) for v in pred]}
+                    predictions[mid]    = {"dates": td_seq, "values": [round(float(v)) for v in pred]}
+                    trained_models[mid] = model
+                    val_preds[mid]      = vp
                     progress(mid, 100)
                     log(f"    ✓ {mid}  " + _fmt_metrics(r))
                 except Exception as e:
                     log(f"    ⚠ {mid} lỗi: {e}")
 
-            # ── 6. ENSEMBLE ────────────────────────────────
-            if "Ensemble" in models and len(predictions) >= 2:
+            # ── Ensemble (Optuna weights trên VAL) ─────────
+            # Weights tìm trên VAL → apply lên TEST
+            # → Ensemble không bao giờ nhìn thấy nhãn test
+            if "Ensemble" in models and len(val_preds) >= 2:
                 mid = "Ensemble"
-                log(f"\n  → {mid}: tìm trọng số tối ưu (Optuna)...")
+                log(f"\n  → {mid}: Optuna tìm trọng số trên VAL set...")
                 progress(mid, 5)
                 try:
-                    # Chỉ dùng các model đã chạy thành công
-                    preds_for_ens = {k: v["values"] for k, v in predictions.items()}
-
-                    # Tìm y_true tương ứng (lấy min độ dài)
-                    min_len   = min(len(v) for v in preds_for_ens.values())
-                    y_ens_val = y_test_real[-min_len:]
+                    # Align val predictions về cùng độ dài
+                    min_len_val  = min(len(v) for v in val_preds.values())
+                    val_preds_al = {k: v[-min_len_val:] for k, v in val_preds.items()}
+                    y_val_al     = y_val_real[-min_len_val:]
 
                     weights = mi.find_optimal_ensemble_weights(
-                        preds_for_ens, y_ens_val,
+                        val_preds_al, y_val_al,
                         send_log=lambda m: log(m)
                     )
                     progress(mid, 70)
-                    ens_pred = mi.ensemble_predict(preds_for_ens, weights)
-                    ens_dates = test_dates[-len(ens_pred):]
 
-                    r = _make_result(mid, y_ens_val, ens_pred.astype(float), ens_dates)
+                    # Apply weights lên TEST predictions
+                    test_preds_al = {
+                        k: np.array(predictions[k]["values"])
+                        for k in weights if k in predictions
+                    }
+                    min_len_test = min(len(v) for v in test_preds_al.values())
+                    test_preds_al = {k: v[-min_len_test:] for k, v in test_preds_al.items()}
+                    y_true_test   = y_test_real[-min_len_test:]
+                    ens_dates     = test_dates[-min_len_test:]
+
+                    ens_pred = mi.ensemble_predict(test_preds_al, weights)
+
+                    r = _make_result(mid, y_true_test, ens_pred.astype(float), ens_dates)
                     results[mid] = r
-                    predictions[mid] = {"dates": ens_dates, "values": ens_pred.tolist()}
+                    predictions[mid] = {"dates": ens_dates, "values": [round(float(v)) for v in ens_pred]}
                     progress(mid, 100)
                     log(f"    ✓ {mid}  weights={weights}  " + _fmt_metrics(r))
                 except Exception as e:

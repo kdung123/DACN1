@@ -87,8 +87,10 @@ def run_pipeline(ticker: str,
      X_test,  y_test,
      scaler_X, scaler_y) = dp.scale_data(train, val, test, features)
 
-    results     = []
-    predictions = {}
+    results      = []
+    predictions  = {}   # pred trên TEST  — dùng để đánh giá & vẽ biểu đồ
+    preds_val    = {}   # pred trên VAL   — dùng để tìm trọng số Ensemble
+    y_val_real   = val[target].values
 
     # ── [5a] Ridge Regression ─────────────────────────────────
     print("\n  ▶ Ridge Regression + Optuna")
@@ -99,8 +101,14 @@ def run_pipeline(ticker: str,
         ridge_pred = scaler_y.inverse_transform(
             ridge_model.predict(X_test).reshape(-1, 1)
         ).ravel()
+        # Val pred — dùng để tìm trọng số Ensemble (không đụng test)
+        ridge_pred_val = scaler_y.inverse_transform(
+            ridge_model.predict(X_val).reshape(-1, 1)
+        ).ravel()
+
         results.append(ev.evaluate(y_test_real, ridge_pred, "Ridge(Optuna)"))
         predictions["Ridge(Optuna)"] = ridge_pred
+        preds_val["Ridge(Optuna)"]   = ridge_pred_val
     except Exception as e:
         print(f"  ⚠  Ridge lỗi: {e}")
 
@@ -113,8 +121,13 @@ def run_pipeline(ticker: str,
         rf_pred = scaler_y.inverse_transform(
             rf_model.predict(X_test).reshape(-1, 1)
         ).ravel()
+        rf_pred_val = scaler_y.inverse_transform(
+            rf_model.predict(X_val).reshape(-1, 1)
+        ).ravel()
+
         results.append(ev.evaluate(y_test_real, rf_pred, "RF(Optuna)"))
         predictions["RF(Optuna)"] = rf_pred
+        preds_val["RF(Optuna)"]   = rf_pred_val
     except Exception as e:
         print(f"  ⚠  Random Forest lỗi: {e}")
 
@@ -142,23 +155,44 @@ def run_pipeline(ticker: str,
             bigru_pred = scaler_y.inverse_transform(
                 bigru_model.predict(Xs_te, verbose=0)
             ).ravel()
+            bigru_pred_val = scaler_y.inverse_transform(
+                bigru_model.predict(Xs_vl, verbose=0)
+            ).ravel()
+
             results.append(ev.evaluate(y_te_seq, bigru_pred, "BiGRU"))
             predictions["BiGRU"] = bigru_pred
+            preds_val["BiGRU"]   = bigru_pred_val
         except Exception as e:
             print(f"  ⚠  BiGRU lỗi: {e}")
 
     # ── [5d] Ensemble ─────────────────────────────────────────
-    if len(predictions) >= 2:
-        print("\n  ▶ Ensemble — Optuna tìm trọng số")
+    # Trọng số tìm trên VAL set → apply lên TEST set
+    # → tránh data leakage (không dùng nhãn test để tune weights)
+    if len(preds_val) >= 2:
+        print("\n  ▶ Ensemble — Optuna tìm trọng số trên VAL")
         try:
-            min_len    = min(len(p) for p in predictions.values())
-            preds_ens  = {k: v[-min_len:] for k, v in predictions.items()}
-            y_true_ens = y_test_real[-min_len:]
+            # Align val predictions về cùng độ dài
+            min_len_val  = min(len(p) for p in preds_val.values())
+            preds_val_al = {k: v[-min_len_val:] for k, v in preds_val.items()}
+            y_val_al     = y_val_real[-min_len_val:]
 
-            best_weights = m.find_optimal_ensemble_weights(preds_ens, y_true_ens)
-            ens_pred     = m.ensemble_predict(preds_ens, best_weights)
+            # Tìm trọng số tối ưu trên VAL (không nhìn test)
+            best_weights = m.find_optimal_ensemble_weights(
+                preds_val_al, y_val_al
+            )
 
-            results.append(ev.evaluate(y_true_ens, ens_pred, "Ensemble"))
+            # Apply trọng số lên TEST predictions
+            preds_test_al = {
+                k: predictions[k]
+                for k in best_weights if k in predictions
+            }
+            min_len_test  = min(len(v) for v in preds_test_al.values())
+            preds_test_al = {k: v[-min_len_test:] for k, v in preds_test_al.items()}
+            y_true_test   = y_test_real[-min_len_test:]
+
+            ens_pred = m.ensemble_predict(preds_test_al, best_weights)
+
+            results.append(ev.evaluate(y_true_test, ens_pred, "Ensemble"))
             predictions["Ensemble"] = ens_pred
         except Exception as e:
             print(f"  ⚠  Ensemble lỗi: {e}")

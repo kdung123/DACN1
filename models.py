@@ -103,8 +103,8 @@ def train_rf_optuna(X_train, y_train, X_val, y_val,
     def objective(trial):
         params = {
             "n_estimators":     trial.suggest_int("n_estimators", 50, 300, step=50),
-            "max_depth":        trial.suggest_int("max_depth", 5, 25),
-            "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 10),
+            "max_depth":        trial.suggest_int("max_depth", 5, 15),    # giảm từ 25 → tránh overfit
+            "min_samples_leaf": trial.suggest_int("min_samples_leaf", 2, 10),  # tối thiểu 2 → tránh lá 1 mẫu
             "max_features":     trial.suggest_categorical("max_features",
                                                           ["sqrt", "log2", 0.5]),
         }
@@ -172,12 +172,14 @@ def build_bigru(input_shape: tuple,
 
         tf.keras.layers.Bidirectional(
             tf.keras.layers.GRU(units[0], return_sequences=True,
-                                kernel_regularizer=reg)
+                                kernel_regularizer=reg,
+                                recurrent_dropout=0.1)   # dropout trên hidden state
         ),
         tf.keras.layers.Dropout(dropout),
 
         tf.keras.layers.GRU(units[1], return_sequences=False,
-                            kernel_regularizer=reg),
+                            kernel_regularizer=reg,
+                            recurrent_dropout=0.1),
         tf.keras.layers.Dropout(dropout),
 
         tf.keras.layers.Dense(1),
