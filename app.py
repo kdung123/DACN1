@@ -203,16 +203,21 @@ def api_train():
                 log(f"\n  → {mid}: LSTM với custom Attention layer...")
                 progress(mid, 3)
                 try:
-                    model = mi.train_lstm_attention(
+                    model, hist = mi.train_lstm_attention(
                         Xs_tr, ys_tr, Xs_vl, ys_vl,
                         epochs=epochs,
                         send_log=lambda m: log(m),
                         send_progress=lambda p: progress(mid, p)
                     )
+                    send("training_history", model=mid,
+                         train_loss=hist.history.get("loss", []),
+                         val_loss=hist.history.get("val_loss", []),
+                         stopped_epoch=len(hist.history.get("loss", [])))
                     pred = scaler_y.inverse_transform(
                         model.predict(Xs_te, verbose=0)).ravel()
                     r = _make_result(mid, y_te_seq, pred, td_seq)
-                    results[mid] = r; predictions[mid] = {"dates": td_seq, "values": [round(float(v)) for v in pred]}
+                    results[mid] = r
+                    predictions[mid] = {"dates": td_seq, "values": [round(float(v)) for v in pred]}
                     progress(mid, 100)
                     log(f"    ✓ {mid}  " + _fmt_metrics(r))
                 except Exception as e:
@@ -224,16 +229,21 @@ def api_train():
                 log(f"\n  → {mid}: Bidirectional GRU...")
                 progress(mid, 3)
                 try:
-                    model = mi.train_bigru(
+                    model, hist = mi.train_bigru(
                         Xs_tr, ys_tr, Xs_vl, ys_vl,
                         epochs=epochs,
                         send_log=lambda m: log(m),
                         send_progress=lambda p: progress(mid, p)
                     )
+                    send("training_history", model=mid,
+                         train_loss=hist.history.get("loss", []),
+                         val_loss=hist.history.get("val_loss", []),
+                         stopped_epoch=len(hist.history.get("loss", [])))
                     pred = scaler_y.inverse_transform(
                         model.predict(Xs_te, verbose=0)).ravel()
                     r = _make_result(mid, y_te_seq, pred, td_seq)
-                    results[mid] = r; predictions[mid] = {"dates": td_seq, "values": [round(float(v)) for v in pred]}
+                    results[mid] = r
+                    predictions[mid] = {"dates": td_seq, "values": [round(float(v)) for v in pred]}
                     progress(mid, 100)
                     log(f"    ✓ {mid}  " + _fmt_metrics(r))
                 except Exception as e:

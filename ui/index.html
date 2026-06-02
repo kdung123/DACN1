@@ -348,7 +348,7 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
     </div>
   </div>
 
-  <!-- Kết quả -->
+  <!-- Loss curve DL models -->\n  <div class=\"card hidden\" id=\"lossCard\">\n    <div class=\"card-head\"><span class=\"ctitle\">Training History — Loss Curve (DL Models)</span>\n      <span style=\"font-size:11px;color:var(--muted);margin-left:8px\">★ = val_loss tốt nhất &nbsp;|&nbsp; đường đứt = epoch dừng</span>\n    </div>\n    <div class=\"card-body\">\n      <div style=\"display:flex;gap:8px;flex-wrap:wrap\" id=\"lossChartWrap\"></div>\n    </div>\n  </div>\n\n  <!-- Kết quả -->
   <div class="card hidden" id="resCard">
     <div class="card-head"><span class="ctitle">Kết quả so sánh mô hình</span>
       <span style="font-size:11px;color:var(--muted);margin-left:8px">
@@ -573,7 +573,9 @@ function startTrain(){
   document.getElementById('btnLabel').textContent='Đang train...';
   document.getElementById('predCard').classList.add('hidden');
   document.getElementById('resCard').classList.add('hidden');
-  predData={}; actualDates=[]; actualVals=[];
+  document.getElementById('lossCard').classList.add('hidden');
+  document.getElementById('lossChartWrap').innerHTML='';
+  predData={}; actualDates=[]; actualVals=[]; dlHistories={};
 
   // Build progress bars
   document.getElementById('progWrap').innerHTML=
@@ -638,6 +640,13 @@ function handle(ev){
     setProg(ev.model,ev.pct);
   } else if(ev.type==='actual'){
     actualDates=ev.dates; actualVals=ev.values;
+  } else if(ev.type==='training_history'){
+    dlHistories[ev.model] = {
+      train_loss: ev.train_loss,
+      val_loss:   ev.val_loss,
+      stopped_epoch: ev.stopped_epoch,
+    };
+    renderLossChart(ev.model, ev.train_loss, ev.val_loss, ev.stopped_epoch);
   } else if(ev.type==='done'){
     ev.results.forEach(r=>setProg(r.model,100,true));
     if(ev.predictions) predData=ev.predictions;
@@ -659,6 +668,7 @@ let visibleModels = new Set(['actual']);
 let chartMode     = 'all';   // 'all' | 'solo'
 let soloModel     = null;    // model id đang solo
 let lastResults   = [];      // lưu để show stats
+let dlHistories   = {};      // {modelId: {train_loss, val_loss, stopped_epoch}}
 
 // ── Build toggle buttons ──────────────────────────────────
 function buildModelToggles() {
@@ -800,7 +810,146 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-// ── Render chart ─────────────────────────────────────────
+// ── Loss curve chart ─────────────────────────────────────
+const lossChartInstances = {};
+
+function renderLossChart(modelId, trainLoss, valLoss, stoppedEpoch) {
+  document.getElementById('lossCard').classList.remove('hidden');
+
+  const m       = MODELS.find(x => x.id === modelId);
+  const color   = m ? m.color : '#7c3aed';
+  const label   = m ? m.label : modelId;
+  const epochs  = trainLoss.map((_, i) => i + 1);
+  const bestEp  = valLoss.indexOf(Math.min(...valLoss)) + 1;
+
+  // Tạo container cho từng model nếu chưa có
+  let wrap = document.getElementById('loss_wrap_' + modelId);
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.id = 'loss_wrap_' + modelId;
+    wrap.style.cssText = 'flex:1;min-width:280px;max-width:480px';
+    wrap.innerHTML = `
+      <div style="font-size:11px;font-weight:700;color:${color};letter-spacing:.5px;
+        text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+        <span style="width:10px;height:10px;border-radius:50%;background:${color};display:inline-block"></span>
+        ${label}
+        <span style="font-weight:400;color:var(--muted);font-size:10px">
+          dừng ep ${stoppedEpoch} &nbsp;|&nbsp; best ep ${bestEp}
+        </span>
+      </div>
+      <div style="position:relative;height:200px">
+        <canvas id="lossCanvas_${modelId}"></canvas>
+      </div>`;
+    document.getElementById('lossChartWrap').appendChild(wrap);
+  }
+
+  // Destroy cũ nếu re-render
+  if (lossChartInstances[modelId]) {
+    lossChartInstances[modelId].destroy();
+  }
+
+  const ctx = document.getElementById('lossCanvas_' + modelId).getContext('2d');
+
+  // Annotation: best epoch point
+  const bestPointTrain = trainLoss.map((v, i) => i + 1 === bestEp ? v : null);
+  const bestPointVal   = valLoss.map((v, i) => i + 1 === bestEp ? v : null);
+
+  lossChartInstances[modelId] = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: epochs,
+      datasets: [
+        {
+          label: 'Train loss',
+          data: trainLoss,
+          borderColor: color,
+          borderWidth: 1.8,
+          backgroundColor: hexToRgba(color, 0.05),
+          pointRadius: 0,
+          tension: .3,
+          fill: true,
+        },
+        {
+          label: 'Val loss',
+          data: valLoss,
+          borderColor: '#dc2626',
+          borderWidth: 1.8,
+          pointRadius: 0,
+          tension: .3,
+          fill: false,
+          borderDash: [4, 2],
+        },
+        {
+          // Best val epoch marker
+          label: `Best val (ep ${bestEp})`,
+          data: bestPointVal,
+          borderColor: '#16a34a',
+          backgroundColor: '#16a34a',
+          pointRadius: 6,
+          pointStyle: 'star',
+          showLine: false,
+        },
+        {
+          // Stopped epoch marker (chỉ hiện nếu khác best)
+          label: stoppedEpoch !== bestEp ? `EarlyStop (ep ${stoppedEpoch})` : '_hidden',
+          data: stoppedEpoch !== bestEp
+            ? valLoss.map((v, i) => i + 1 === stoppedEpoch ? v : null)
+            : [],
+          borderColor: '#f59e0b',
+          backgroundColor: '#f59e0b',
+          pointRadius: 5,
+          pointStyle: 'triangle',
+          showLine: false,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 400 },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          display: true,
+          labels: {
+            font: { size: 10 },
+            boxWidth: 10,
+            color: '#8b90a7',
+            filter: item => item.text !== '_hidden',
+          },
+        },
+        tooltip: {
+          backgroundColor: '#fff',
+          borderColor: '#e4e6ef',
+          borderWidth: 1,
+          titleColor: '#1c1e2e',
+          bodyColor: '#8b90a7',
+          padding: 8,
+          callbacks: {
+            title: items => `Epoch ${items[0]?.label}`,
+            label: c => c.dataset.label.startsWith('_') ? null
+              : `  ${c.dataset.label}: ${c.parsed.y !== null ? c.parsed.y.toFixed(6) : '—'}`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          title: { display: true, text: 'Epoch', font: { size: 10 }, color: '#8b90a7' },
+          grid: { color: '#f1f3f7' },
+          ticks: { color: '#8b90a7', font: { size: 9 }, maxTicksLimit: 10 },
+        },
+        y: {
+          title: { display: true, text: 'MSE Loss', font: { size: 10 }, color: '#8b90a7' },
+          grid: { color: '#f1f3f7' },
+          ticks: { color: '#8b90a7', font: { size: 9 },
+            callback: v => v < 0.001 ? v.toExponential(2) : v.toFixed(4) },
+        },
+      },
+    },
+  });
+}
+
+// ── Render pred chart ─────────────────────────────────────
 function renderPredChart() {
   if (!actualDates.length) return;
   document.getElementById('predCard').classList.remove('hidden');

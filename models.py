@@ -58,8 +58,8 @@ def predict_arima_walkforward(train_series: pd.Series,
                                send_log=None,
                                send_progress=None):
     """
-    Walk-forward validation: dự báo từng bước 1, cập nhật lịch sử liên tục.
-    Khắc phục lỗi đường thẳng của multi-step forecast.
+    Walk-forward validation: dự báo từng bước 1, update incremental
+    bằng model.append() thay vì fit lại từ đầu → nhanh hơn O(n) lần.
     """
     from statsmodels.tsa.arima.model import ARIMA as _A
 
@@ -70,11 +70,15 @@ def predict_arima_walkforward(train_series: pd.Series,
     preds   = []
     n       = len(y_test_real)
 
+    # Fit một lần duy nhất trên toàn bộ train
+    fitted = _A(history, order=order).fit()
+
     for i in range(n):
-        fitted = _A(history, order=order).fit()
-        yhat   = float(fitted.forecast(steps=1)[0])
+        yhat = float(fitted.forecast(steps=1)[0])
         preds.append(round(yhat))
-        history.append(float(y_test_real[i]))
+
+        # Update incremental — không fit lại từ đầu
+        fitted = fitted.append([float(y_test_real[i])], refit=False)
 
         if i % max(1, n // 8) == 0:
             progress(int(i / n * 85) + 10)
@@ -171,8 +175,8 @@ def build_lstm_attention(input_shape: tuple, units=(64, 32), dropout=0.2):
     Cải tiến từ LSTM thuần: thêm custom Attention layer tự viết.
 
     Kiến trúc:
-        Input → LSTM(64, return_seq=True) → AttentionLayer
-              → Dense(32) → Dropout → Dense(1)
+        Input → LSTM(64, return_seq=True) → Dropout → AttentionLayer
+              → Dense(32, relu) → Dropout → Dense(1)
 
     Attention:
         score(t) = tanh(W·h(t) + b)     # alignment score
@@ -180,13 +184,13 @@ def build_lstm_attention(input_shape: tuple, units=(64, 32), dropout=0.2):
         context  = Σ alpha(t) × h(t)     # weighted context vector
     """
     import tensorflow as tf
-    # use tf.keras.* attributes to avoid direct source import resolution issues in some editors
-    Model = tf.keras.Model
-    LSTM = tf.keras.layers.LSTM
-    Dense = tf.keras.layers.Dense
-    Dropout = tf.keras.layers.Dropout
-    Layer = tf.keras.layers.Layer
-    KInput = tf.keras.layers.Input
+
+    Model         = tf.keras.Model
+    LSTM          = tf.keras.layers.LSTM
+    Dense         = tf.keras.layers.Dense
+    Dropout       = tf.keras.layers.Dropout
+    Layer         = tf.keras.layers.Layer
+    KInput        = tf.keras.layers.Input
 
     class AttentionLayer(Layer):
         """Self-attention trên output LSTM — tự viết, không dùng thư viện."""
@@ -223,8 +227,9 @@ def build_lstm_attention(input_shape: tuple, units=(64, 32), dropout=0.2):
 def train_lstm_attention(Xs_tr, ys_tr, Xs_vl, ys_vl,
                          epochs=None, send_log=None, send_progress=None):
     import tensorflow as tf
-    EarlyStopping = tf.keras.callbacks.EarlyStopping
-    Callback = tf.keras.callbacks.Callback
+    EarlyStopping      = tf.keras.callbacks.EarlyStopping
+    ReduceLROnPlateau  = tf.keras.callbacks.ReduceLROnPlateau
+    Callback           = tf.keras.callbacks.Callback
 
     epochs   = epochs or config.DL_EPOCHS
     log      = send_log      or print
@@ -233,19 +238,29 @@ def train_lstm_attention(Xs_tr, ys_tr, Xs_vl, ys_vl,
     class CB(Callback):
         def on_epoch_end(self, epoch, logs=None):
             progress(min(int((epoch + 1) / epochs * 90) + 5, 95))
-            log(f"      epoch {epoch+1}/{epochs}  val_loss={logs.get('val_loss',0):.5f}")
+            lr = float(self.model.optimizer.learning_rate)
+            log(f"      epoch {epoch+1}/{epochs}  "
+                f"val_loss={logs.get('val_loss', 0):.5f}  lr={lr:.2e}")
 
     model = build_lstm_attention((Xs_tr.shape[1], Xs_tr.shape[2]))
     log(f"    LSTM+Attention: {model.count_params():,} params")
 
-    model.fit(Xs_tr, ys_tr, validation_data=(Xs_vl, ys_vl),
-              epochs=epochs, batch_size=32, verbose=0,
-              callbacks=[
-                  EarlyStopping(monitor="val_loss", patience=config.DL_PATIENCE,
-                                restore_best_weights=True, verbose=0),
-                  CB(),
-              ])
-    return model
+    hist = model.fit(
+        Xs_tr, ys_tr,
+        validation_data=(Xs_vl, ys_vl),
+        epochs=epochs,
+        batch_size=32,
+        verbose=0,
+        callbacks=[
+            EarlyStopping(monitor="val_loss", patience=config.DL_PATIENCE,
+                          restore_best_weights=True, verbose=0),
+            ReduceLROnPlateau(monitor="val_loss", factor=0.5,
+                              patience=5, min_lr=1e-6, verbose=0),
+            CB(),
+        ],
+    )
+    log(f"    ✓ LSTM+Attention dừng ở epoch {len(hist.history['loss'])}/{epochs}")
+    return model, hist
 
 
 # ════════════════════════════════════════════════════════════
@@ -258,23 +273,24 @@ def build_bigru(input_shape: tuple, units=(64, 32), dropout=0.2):
     theo cả 2 chiều (forward + backward), tăng khả năng học pattern.
 
     Kiến trúc:
-        Input → Bidirectional(GRU(64)) → Dropout → GRU(32) → Dropout → Dense(1)
+        Input → Bidirectional(GRU(64, return_seq=True)) → Dropout
+              → GRU(32, return_sequences=False) → Dropout → Dense(1)
     """
     import tensorflow as tf
-    # use tf.keras.* attributes to avoid direct source import resolution issues in some editors
-    Sequential = tf.keras.Sequential
-    GRU = tf.keras.layers.GRU
+
+    Sequential    = tf.keras.Sequential
+    GRU           = tf.keras.layers.GRU
     Bidirectional = tf.keras.layers.Bidirectional
-    Dense = tf.keras.layers.Dense
-    Dropout = tf.keras.layers.Dropout
-    KInput = tf.keras.layers.Input
+    Dense         = tf.keras.layers.Dense
+    Dropout       = tf.keras.layers.Dropout
+    KInput        = tf.keras.layers.Input
 
     tf.random.set_seed(config.RANDOM_SEED)
     model = Sequential([
         KInput(shape=input_shape),
         Bidirectional(GRU(units[0], return_sequences=True)),
         Dropout(dropout),
-        GRU(units[1]),
+        GRU(units[1], return_sequences=False),
         Dropout(dropout),
         Dense(1),
     ], name="BiGRU")
@@ -285,8 +301,9 @@ def build_bigru(input_shape: tuple, units=(64, 32), dropout=0.2):
 def train_bigru(Xs_tr, ys_tr, Xs_vl, ys_vl,
                 epochs=None, send_log=None, send_progress=None):
     import tensorflow as tf
-    EarlyStopping = tf.keras.callbacks.EarlyStopping
-    Callback = tf.keras.callbacks.Callback
+    EarlyStopping      = tf.keras.callbacks.EarlyStopping
+    ReduceLROnPlateau  = tf.keras.callbacks.ReduceLROnPlateau
+    Callback           = tf.keras.callbacks.Callback
 
     epochs   = epochs or config.DL_EPOCHS
     log      = send_log      or print
@@ -295,19 +312,29 @@ def train_bigru(Xs_tr, ys_tr, Xs_vl, ys_vl,
     class CB(Callback):
         def on_epoch_end(self, epoch, logs=None):
             progress(min(int((epoch + 1) / epochs * 90) + 5, 95))
-            log(f"      epoch {epoch+1}/{epochs}  val_loss={logs.get('val_loss',0):.5f}")
+            lr = float(self.model.optimizer.learning_rate)
+            log(f"      epoch {epoch+1}/{epochs}  "
+                f"val_loss={logs.get('val_loss', 0):.5f}  lr={lr:.2e}")
 
     model = build_bigru((Xs_tr.shape[1], Xs_tr.shape[2]))
     log(f"    BiGRU: {model.count_params():,} params")
 
-    model.fit(Xs_tr, ys_tr, validation_data=(Xs_vl, ys_vl),
-              epochs=epochs, batch_size=32, verbose=0,
-              callbacks=[
-                  EarlyStopping(monitor="val_loss", patience=config.DL_PATIENCE,
-                                restore_best_weights=True, verbose=0),
-                  CB(),
-              ])
-    return model
+    hist = model.fit(
+        Xs_tr, ys_tr,
+        validation_data=(Xs_vl, ys_vl),
+        epochs=epochs,
+        batch_size=32,
+        verbose=0,
+        callbacks=[
+            EarlyStopping(monitor="val_loss", patience=config.DL_PATIENCE,
+                          restore_best_weights=True, verbose=0),
+            ReduceLROnPlateau(monitor="val_loss", factor=0.5,
+                              patience=5, min_lr=1e-6, verbose=0),
+            CB(),
+        ],
+    )
+    log(f"    ✓ BiGRU dừng ở epoch {len(hist.history['loss'])}/{epochs}")
+    return model, hist
 
 
 # ════════════════════════════════════════════════════════════
@@ -319,6 +346,7 @@ def ensemble_predict(predictions: dict, weights: dict = None) -> np.ndarray:
     Kết hợp dự báo nhiều model theo trọng số.
     Tự động căn chỉnh độ dài về min.
     weights=None → trọng số bằng nhau.
+    Trả về float (round đến hàng đơn vị) thay vì int để giữ độ chính xác.
     """
     names   = list(predictions.keys())
     arrs    = [np.array(predictions[n]) for n in names]
@@ -331,14 +359,17 @@ def ensemble_predict(predictions: dict, weights: dict = None) -> np.ndarray:
         w_raw = np.array([weights.get(n, 1.0) for n in names])
         w = w_raw / w_raw.sum()
 
-    return np.round(sum(wi * a for wi, a in zip(w, arrs))).astype(int)
+    pred = sum(wi * a for wi, a in zip(w, arrs))
+    return np.round(pred, 0)   # float, round đến hàng đơn vị
 
 
 def find_optimal_ensemble_weights(predictions: dict,
                                    y_true: np.ndarray,
+                                   n_trials: int = 100,
                                    send_log=None) -> dict:
     """
     Optuna tìm trọng số tối ưu minimize RMSE ensemble.
+    Tăng n_trials lên 100 để search space 5 chiều đủ coverage.
     """
     log   = send_log or print
     names = list(predictions.keys())
@@ -349,13 +380,14 @@ def find_optimal_ensemble_weights(predictions: dict,
 
     def objective(trial):
         w = np.array([trial.suggest_float(nm, 0.0, 1.0) for nm in names])
-        if w.sum() < 1e-6: return 1e9
+        if w.sum() < 1e-6:
+            return 1e9
         w /= w.sum()
         pred = sum(wi * a for wi, a in zip(w, arrs))
         return float(np.sqrt(np.mean((y - pred) ** 2)))
 
     study = optuna.create_study(direction="minimize")
-    study.optimize(objective, n_trials=50, show_progress_bar=False)
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
 
     raw   = {n: study.best_params[n] for n in names}
     total = sum(raw.values())

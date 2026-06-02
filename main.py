@@ -125,10 +125,13 @@ def run_pipeline(ticker: str, mode: str = config.DATA_MODE,
             use_dl = False
 
     if use_dl:
+        dl_histories = {}
+
         print("\n[6d] LSTM + Attention")
         try:
-            lstm_model = m.train_lstm_attention(Xs_tr, ys_tr, Xs_vl, ys_vl)
+            lstm_model, lstm_hist = m.train_lstm_attention(Xs_tr, ys_tr, Xs_vl, ys_vl)
             m.save_model(lstm_model, f"lstm_attn_{ticker}")
+            dl_histories["LSTM+Attention"] = lstm_hist
             lstm_pred = scaler_y.inverse_transform(
                 lstm_model.predict(Xs_te, verbose=0)
             ).ravel()
@@ -139,8 +142,9 @@ def run_pipeline(ticker: str, mode: str = config.DATA_MODE,
 
         print("\n[6e] Bidirectional GRU")
         try:
-            bigru_model = m.train_bigru(Xs_tr, ys_tr, Xs_vl, ys_vl)
+            bigru_model, bigru_hist = m.train_bigru(Xs_tr, ys_tr, Xs_vl, ys_vl)
             m.save_model(bigru_model, f"bigru_{ticker}")
+            dl_histories["BiGRU"] = bigru_hist
             bigru_pred = scaler_y.inverse_transform(
                 bigru_model.predict(Xs_te, verbose=0)
             ).ravel()
@@ -148,6 +152,9 @@ def run_pipeline(ticker: str, mode: str = config.DATA_MODE,
             predictions["BiGRU"] = bigru_pred
         except Exception as e:
             print(f"  ⚠ BiGRU lỗi: {e}")
+
+        if dl_histories:
+            ev.plot_training_history(dl_histories, ticker)
 
     # ── 6f. Ensemble (Optuna weights) ────────────────────────
     if len(predictions) >= 2:
