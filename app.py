@@ -20,10 +20,8 @@ app = Flask(__name__, static_folder="ui", static_url_path="/ui")
 
 MODEL_REGISTRY = {
     # Tên hiển thị  →  id nội bộ
-    "AutoARIMA":     "auto_arima",
     "Ridge(Optuna)": "optuna_ridge",
     "RF(Optuna)":    "optuna_rf",
-    "LSTM+Attn":     "lstm_attention",
     "BiGRU":         "bigru",
     "Ensemble":      "ensemble",
 }
@@ -119,13 +117,13 @@ def api_train():
             send("actual", dates=test_dates, values=[round(float(v)) for v in y_test_real])
             log("      ✓ Xong")
 
-            log("[5/5] Huấn luyện các mô hình cải tiến...")
+            log("[5/5] Huấn luyện: Ridge | RF | BiGRU | Ensemble...")
             results     = {}   # model_id → metrics dict
             predictions = {}   # model_id → {dates, values}
 
             # DL sequences
             dl_ready = False
-            if any(m in models for m in ["LSTM+Attn", "BiGRU", "Ensemble"]):
+            if any(m in models for m in ["BiGRU", "Ensemble"]):
                 Xs_tr, ys_tr = dp.make_sequences(X_train, y_train, seq_len)
                 Xs_vl, ys_vl = dp.make_sequences(X_val,   y_val,   seq_len)
                 Xs_te, _     = dp.make_sequences(X_test,  y_test,  seq_len)
@@ -133,29 +131,6 @@ def api_train():
                 td_seq       = test_dates[seq_len:]
                 dl_ready     = len(Xs_tr) >= 10
 
-            # ── 1. AUTO_ARIMA ──────────────────────────────
-            if "AutoARIMA" in models:
-                mid = "AutoARIMA"
-                log(f"\n  → {mid}: auto_arima tìm (p,d,q)...")
-                progress(mid, 5)
-                try:
-                    train_val_series = pd.concat([train, val])[target]
-                    _, order = mi.train_auto_arima(
-                        train_val_series,
-                        send_log=lambda m: log(m)
-                    )
-                    progress(mid, 15)
-                    pred = mi.predict_arima_walkforward(
-                        train_val_series, y_test_real, order,
-                        send_log=lambda m: log(m),
-                        send_progress=lambda p: progress(mid, p)
-                    )
-                    r = _make_result(mid, y_test_real, pred, test_dates)
-                    results[mid] = r; predictions[mid] = {"dates": test_dates, "values": pred.tolist()}
-                    progress(mid, 100)
-                    log(f"    ✓ {mid}  ARIMA{order}  " + _fmt_metrics(r))
-                except Exception as e:
-                    log(f"    ⚠ {mid} lỗi: {e}")
 
             # ── 2. RIDGE (OPTUNA) ──────────────────────────
             if "Ridge(Optuna)" in models:
@@ -197,33 +172,7 @@ def api_train():
                 except Exception as e:
                     log(f"    ⚠ {mid} lỗi: {e}")
 
-            # ── 4. LSTM + ATTENTION ────────────────────────
-            if "LSTM+Attn" in models and dl_ready:
-                mid = "LSTM+Attn"
-                log(f"\n  → {mid}: LSTM với custom Attention layer...")
-                progress(mid, 3)
-                try:
-                    model, hist = mi.train_lstm_attention(
-                        Xs_tr, ys_tr, Xs_vl, ys_vl,
-                        epochs=epochs,
-                        send_log=lambda m: log(m),
-                        send_progress=lambda p: progress(mid, p)
-                    )
-                    send("training_history", model=mid,
-                         train_loss=hist.history.get("loss", []),
-                         val_loss=hist.history.get("val_loss", []),
-                         stopped_epoch=len(hist.history.get("loss", [])))
-                    pred = scaler_y.inverse_transform(
-                        model.predict(Xs_te, verbose=0)).ravel()
-                    r = _make_result(mid, y_te_seq, pred, td_seq)
-                    results[mid] = r
-                    predictions[mid] = {"dates": td_seq, "values": [round(float(v)) for v in pred]}
-                    progress(mid, 100)
-                    log(f"    ✓ {mid}  " + _fmt_metrics(r))
-                except Exception as e:
-                    log(f"    ⚠ {mid} lỗi: {e}\n{traceback.format_exc()}")
-
-            # ── 5. BIDIRECTIONAL GRU ───────────────────────
+            # ── 4. BIDIRECTIONAL GRU ───────────────────────
             if "BiGRU" in models and dl_ready:
                 mid = "BiGRU"
                 log(f"\n  → {mid}: Bidirectional GRU...")

@@ -1,17 +1,17 @@
-# ============================================================
-# models.py  –  Tất cả mô hình dự báo (đã gộp & cải tiến)
-#
-#  1. auto_arima      — tự chọn (p,d,q) tốt nhất + walk-forward
-#  2. optuna_ridge    — Ridge Regression + Optuna tìm alpha
-#  3. optuna_rf       — Random Forest + Optuna tìm hyperparameter
-#  4. lstm_attention  — LSTM + custom Attention layer
-#  5. bigru           — Bidirectional GRU
-#  6. ensemble        — Weighted average tối ưu bằng Optuna
-# ============================================================
+# ╔══════════════════════════════════════════════════════════════╗
+# ║                        models.py                            ║
+# ║           Tất cả mô hình dự báo giá cổ phiếu               ║
+# ╠══════════════════════════════════════════════════════════════╣
+# ║  1. Ridge Regression  — L2 regularization + Optuna alpha    ║
+# ║  2. Random Forest     — Optuna tìm 4 hyperparameters        ║
+# ║  3. Bidirectional GRU — Dropout 0.3 + L2 + ReduceLR        ║
+# ║  4. Ensemble          — Optuna tìm trọng số tối ưu          ║
+# ╚══════════════════════════════════════════════════════════════╝
 
-import os, warnings
+import os
+import warnings
+
 import numpy as np
-import pandas as pd
 import optuna
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -21,90 +21,37 @@ warnings.filterwarnings("ignore")
 import config
 
 
-# ════════════════════════════════════════════════════════════
-#  1. AUTO ARIMA
-# ════════════════════════════════════════════════════════════
-
-def train_auto_arima(train_series: pd.Series, send_log=None):
-    """
-    Dùng pmdarima.auto_arima để tự chọn (p,d,q) tốt nhất theo AIC.
-    Cải tiến so với ARIMA cố định (5,1,0): tự động tìm order phù hợp
-    với từng mã cổ phiếu.
-    """
-    from pmdarima import auto_arima
-
-    log = send_log or print
-    log("    auto_arima: đang tìm (p,d,q) tốt nhất...")
-
-    model = auto_arima(
-        train_series,
-        start_p=0, max_p=6,
-        start_q=0, max_q=3,
-        d=None,           # tự chọn d qua ADF test
-        seasonal=False,
-        information_criterion="aic",
-        stepwise=True,
-        error_action="ignore",
-        suppress_warnings=True,
-    )
-    order = model.order
-    log(f"    ✓ auto_arima chọn ARIMA{order}  AIC={model.aic():.1f}")
-    return model, order
-
-
-def predict_arima_walkforward(train_series: pd.Series,
-                               y_test_real: np.ndarray,
-                               order: tuple,
-                               send_log=None,
-                               send_progress=None):
-    """
-    Walk-forward validation: dự báo từng bước 1, update incremental
-    bằng model.append() thay vì fit lại từ đầu → nhanh hơn O(n) lần.
-    """
-    from statsmodels.tsa.arima.model import ARIMA as _A
-
-    log      = send_log      or print
-    progress = send_progress or (lambda p: None)
-
-    history = list(train_series.values)
-    preds   = []
-    n       = len(y_test_real)
-
-    # Fit một lần duy nhất trên toàn bộ train
-    fitted = _A(history, order=order).fit()
-
-    for i in range(n):
-        yhat = float(fitted.forecast(steps=1)[0])
-        preds.append(round(yhat))
-
-        # Update incremental — không fit lại từ đầu
-        fitted = fitted.append([float(y_test_real[i])], refit=False)
-
-        if i % max(1, n // 8) == 0:
-            progress(int(i / n * 85) + 10)
-            log(f"      walk-forward {i+1}/{n}...")
-
-    return np.array(preds)
-
-
-# ════════════════════════════════════════════════════════════
-#  2. RIDGE REGRESSION + OPTUNA
-# ════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════
+#  1. RIDGE REGRESSION + OPTUNA
+# ════════════════════════════════════════════════════════════════
 
 def train_ridge_optuna(X_train, y_train, X_val, y_val,
-                       n_trials=30, send_log=None):
+                       n_trials: int = config.RIDGE_TRIALS,
+                       send_log=None):
     """
-    Cải tiến từ LinearRegression: thêm L2 regularization (Ridge)
-    và tự động tìm hệ số alpha tối ưu bằng Optuna.
+    Ridge Regression với L2 regularization.
+    Optuna tự động tìm hệ số alpha tối ưu trên không gian log-scale.
 
-    LinearRegression: loss = MSE
-    Ridge:            loss = MSE + alpha × Σ(w²)
+    So với LinearRegression thuần:
+      LinearRegression : loss = MSE
+      Ridge            : loss = MSE + alpha × Σ(wᵢ²)
+    → Ridge ít overfitting hơn, ổn định hơn khi features tương quan cao.
+
+    Parameters
+    ----------
+    n_trials : int   Số lần thử Optuna (mặc định 30 — đủ cho 1 chiều)
+
+    Returns
+    -------
+    (model, best_alpha)
+      model      : Ridge đã fit lại trên train + val
+      best_alpha : alpha tối ưu tìm được
     """
     from sklearn.linear_model import Ridge
     from sklearn.metrics import mean_squared_error
 
     log = send_log or print
-    log(f"    Optuna Ridge: {n_trials} trials tìm alpha...")
+    log(f"    Optuna Ridge: {n_trials} trials tìm alpha (log-scale 1e-3 → 100)...")
 
     def objective(trial):
         alpha = trial.suggest_float("alpha", 1e-3, 100, log=True)
@@ -115,26 +62,37 @@ def train_ridge_optuna(X_train, y_train, X_val, y_val,
     study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
 
     best_alpha = study.best_params["alpha"]
-    log(f"    ✓ Ridge best alpha={best_alpha:.4f}  val_mse={study.best_value:.6f}")
+    log(f"    ✓ alpha = {best_alpha:.4f}  |  val_mse = {study.best_value:.6f}")
 
-    # Fit lại trên train+val với alpha tốt nhất
-    final = Ridge(alpha=best_alpha).fit(
+    # Fit lại trên train + val để tận dụng toàn bộ dữ liệu có nhãn
+    final_model = Ridge(alpha=best_alpha).fit(
         np.concatenate([X_train, X_val]),
-        np.concatenate([y_train, y_val])
+        np.concatenate([y_train, y_val]),
     )
-    return final, best_alpha
+    return final_model, best_alpha
 
 
-# ════════════════════════════════════════════════════════════
-#  3. RANDOM FOREST + OPTUNA
-# ════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════
+#  2. RANDOM FOREST + OPTUNA
+# ════════════════════════════════════════════════════════════════
 
 def train_rf_optuna(X_train, y_train, X_val, y_val,
-                    n_trials=20, send_log=None):
+                    n_trials: int = config.RF_TRIALS,
+                    send_log=None):
     """
-    Cải tiến từ RandomForest cố định hyperparameter:
-    Optuna tự động tìm n_estimators, max_depth, min_samples_leaf,
-    max_features tối ưu.
+    Random Forest với Optuna tìm 4 hyperparameters cùng lúc:
+      • n_estimators     : số cây (50 → 300)
+      • max_depth        : độ sâu tối đa (5 → 25)
+      • min_samples_leaf : số mẫu tối thiểu ở lá (1 → 10)
+      • max_features     : số features mỗi split ("sqrt" / "log2" / 0.5)
+
+    Parameters
+    ----------
+    n_trials : int   Số lần thử Optuna (mặc định 40 — phù hợp 4 chiều)
+
+    Returns
+    -------
+    (model, best_params)
     """
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.metrics import mean_squared_error
@@ -147,206 +105,164 @@ def train_rf_optuna(X_train, y_train, X_val, y_val,
             "n_estimators":     trial.suggest_int("n_estimators", 50, 300, step=50),
             "max_depth":        trial.suggest_int("max_depth", 5, 25),
             "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 10),
-            "max_features":     trial.suggest_categorical("max_features", ["sqrt", "log2", 0.5]),
+            "max_features":     trial.suggest_categorical("max_features",
+                                                          ["sqrt", "log2", 0.5]),
         }
-        model = RandomForestRegressor(**params, random_state=42, n_jobs=-1).fit(X_train, y_train)
+        model = RandomForestRegressor(
+            **params, random_state=config.RANDOM_SEED, n_jobs=-1
+        ).fit(X_train, y_train)
         return float(mean_squared_error(y_val, model.predict(X_val)))
 
     study = optuna.create_study(direction="minimize")
     study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
 
     bp = study.best_params
-    log(f"    ✓ RF best: n_est={bp['n_estimators']} depth={bp['max_depth']} "
-        f"leaf={bp['min_samples_leaf']}  val_mse={study.best_value:.4f}")
+    log(f"    ✓ n_est={bp['n_estimators']}  depth={bp['max_depth']}  "
+        f"leaf={bp['min_samples_leaf']}  feats={bp['max_features']}")
+    log(f"       val_mse = {study.best_value:.4f}")
 
-    final = RandomForestRegressor(**bp, random_state=42, n_jobs=-1).fit(
+    final_model = RandomForestRegressor(
+        **bp, random_state=config.RANDOM_SEED, n_jobs=-1
+    ).fit(
         np.concatenate([X_train, X_val]),
-        np.concatenate([y_train, y_val])
+        np.concatenate([y_train, y_val]),
     )
-    return final, bp
+    return final_model, bp
 
 
-# ════════════════════════════════════════════════════════════
-#  4. LSTM + ATTENTION LAYER (tự implement)
-# ════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════
+#  3. BIDIRECTIONAL GRU
+# ════════════════════════════════════════════════════════════════
 
-def build_lstm_attention(input_shape: tuple, units=(64, 32), dropout=0.2):
+def build_bigru(input_shape: tuple,
+                units: tuple = (64, 32),
+                dropout: float = config.DROPOUT_RATE):
     """
-    Cải tiến từ LSTM thuần: thêm custom Attention layer tự viết.
+    Kiến trúc Bidirectional GRU:
 
-    Kiến trúc:
-        Input → LSTM(64, return_seq=True) → Dropout → AttentionLayer
-              → Dense(32, relu) → Dropout → Dense(1)
+        Input(seq_len, n_features)
+          → Bidirectional(GRU(64, return_sequences=True))  ← đọc 2 chiều
+          → Dropout(0.3)
+          → GRU(32, return_sequences=False)
+          → Dropout(0.3)
+          → Dense(1)
 
-    Attention:
-        score(t) = tanh(W·h(t) + b)     # alignment score
-        alpha(t) = softmax(score)         # attention weight
-        context  = Σ alpha(t) × h(t)     # weighted context vector
+    Cải tiến so với GRU đơn hướng:
+      • Bidirectional: học pattern theo cả chiều thuận và nghịch
+      • Dropout 0.3 + L2(1e-4): giảm overfitting trên dữ liệu ngắn
+      • ReduceLROnPlateau: tự động giảm learning rate khi plateau
+
+    Parameters
+    ----------
+    input_shape : tuple   (seq_len, n_features)
+    units       : tuple   Số unit GRU mỗi tầng
+    dropout     : float   Tỷ lệ dropout
+
+    Returns
+    -------
+    tf.keras.Model   (chưa train)
     """
     import tensorflow as tf
-
-    Model         = tf.keras.Model
-    LSTM          = tf.keras.layers.LSTM
-    Dense         = tf.keras.layers.Dense
-    Dropout       = tf.keras.layers.Dropout
-    Layer         = tf.keras.layers.Layer
-    KInput        = tf.keras.layers.Input
-
-    class AttentionLayer(Layer):
-        """Self-attention trên output LSTM — tự viết, không dùng thư viện."""
-        def build(self, input_shape):
-            self.W = self.add_weight(name="W", shape=(input_shape[-1], 1),
-                                     initializer="glorot_uniform", trainable=True)
-            self.b = self.add_weight(name="b", shape=(1,),
-                                     initializer="zeros", trainable=True)
-            super().build(input_shape)
-
-        def call(self, x):
-            score   = tf.nn.tanh(tf.matmul(x, self.W) + self.b)  # (batch, T, 1)
-            alpha   = tf.nn.softmax(score, axis=1)                 # (batch, T, 1)
-            context = tf.reduce_sum(alpha * x, axis=1)             # (batch, features)
-            return context
-
-        def get_config(self):
-            return super().get_config()
 
     tf.random.set_seed(config.RANDOM_SEED)
-    inp  = KInput(shape=input_shape)
-    x    = LSTM(units[0], return_sequences=True)(inp)
-    x    = Dropout(dropout)(x)
-    x    = AttentionLayer()(x)
-    x    = Dense(units[1], activation="relu")(x)
-    x    = Dropout(dropout)(x)
-    out  = Dense(1)(x)
+    reg = tf.keras.regularizers.l2(1e-4)
 
-    model = Model(inputs=inp, outputs=out, name="LSTM_Attention")
-    model.compile(optimizer="adam", loss="mse")
-    return model
+    model = tf.keras.Sequential([
+        tf.keras.layers.Input(shape=input_shape),
 
+        tf.keras.layers.Bidirectional(
+            tf.keras.layers.GRU(units[0], return_sequences=True,
+                                kernel_regularizer=reg)
+        ),
+        tf.keras.layers.Dropout(dropout),
 
-def train_lstm_attention(Xs_tr, ys_tr, Xs_vl, ys_vl,
-                         epochs=None, send_log=None, send_progress=None):
-    import tensorflow as tf
-    EarlyStopping      = tf.keras.callbacks.EarlyStopping
-    ReduceLROnPlateau  = tf.keras.callbacks.ReduceLROnPlateau
-    Callback           = tf.keras.callbacks.Callback
+        tf.keras.layers.GRU(units[1], return_sequences=False,
+                            kernel_regularizer=reg),
+        tf.keras.layers.Dropout(dropout),
 
-    epochs   = epochs or config.DL_EPOCHS
-    log      = send_log      or print
-    progress = send_progress or (lambda p: None)
-
-    class CB(Callback):
-        def on_epoch_end(self, epoch, logs=None):
-            progress(min(int((epoch + 1) / epochs * 90) + 5, 95))
-            lr = float(self.model.optimizer.learning_rate)
-            log(f"      epoch {epoch+1}/{epochs}  "
-                f"val_loss={logs.get('val_loss', 0):.5f}  lr={lr:.2e}")
-
-    model = build_lstm_attention((Xs_tr.shape[1], Xs_tr.shape[2]))
-    log(f"    LSTM+Attention: {model.count_params():,} params")
-
-    hist = model.fit(
-        Xs_tr, ys_tr,
-        validation_data=(Xs_vl, ys_vl),
-        epochs=epochs,
-        batch_size=32,
-        verbose=0,
-        callbacks=[
-            EarlyStopping(monitor="val_loss", patience=config.DL_PATIENCE,
-                          restore_best_weights=True, verbose=0),
-            ReduceLROnPlateau(monitor="val_loss", factor=0.5,
-                              patience=5, min_lr=1e-6, verbose=0),
-            CB(),
-        ],
-    )
-    log(f"    ✓ LSTM+Attention dừng ở epoch {len(hist.history['loss'])}/{epochs}")
-    return model, hist
-
-
-# ════════════════════════════════════════════════════════════
-#  5. BIDIRECTIONAL GRU
-# ════════════════════════════════════════════════════════════
-
-def build_bigru(input_shape: tuple, units=(64, 32), dropout=0.2):
-    """
-    Cải tiến từ GRU đơn hướng: Bidirectional GRU đọc chuỗi
-    theo cả 2 chiều (forward + backward), tăng khả năng học pattern.
-
-    Kiến trúc:
-        Input → Bidirectional(GRU(64, return_seq=True)) → Dropout
-              → GRU(32, return_sequences=False) → Dropout → Dense(1)
-    """
-    import tensorflow as tf
-
-    Sequential    = tf.keras.Sequential
-    GRU           = tf.keras.layers.GRU
-    Bidirectional = tf.keras.layers.Bidirectional
-    Dense         = tf.keras.layers.Dense
-    Dropout       = tf.keras.layers.Dropout
-    KInput        = tf.keras.layers.Input
-
-    tf.random.set_seed(config.RANDOM_SEED)
-    model = Sequential([
-        KInput(shape=input_shape),
-        Bidirectional(GRU(units[0], return_sequences=True)),
-        Dropout(dropout),
-        GRU(units[1], return_sequences=False),
-        Dropout(dropout),
-        Dense(1),
+        tf.keras.layers.Dense(1),
     ], name="BiGRU")
+
     model.compile(optimizer="adam", loss="mse")
     return model
 
 
 def train_bigru(Xs_tr, ys_tr, Xs_vl, ys_vl,
-                epochs=None, send_log=None, send_progress=None):
-    import tensorflow as tf
-    EarlyStopping      = tf.keras.callbacks.EarlyStopping
-    ReduceLROnPlateau  = tf.keras.callbacks.ReduceLROnPlateau
-    Callback           = tf.keras.callbacks.Callback
+                epochs: int = None,
+                send_log=None,
+                send_progress=None):
+    """
+    Huấn luyện BiGRU với:
+      • EarlyStopping(patience=10) + restore_best_weights
+      • ReduceLROnPlateau(patience=5, factor=0.5, min_lr=1e-6)
 
-    epochs   = epochs or config.DL_EPOCHS
+    Returns
+    -------
+    (model, history)
+      model   : BiGRU đã train
+      history : Keras History object (dùng để vẽ loss curve)
+    """
+    import tensorflow as tf
+
+    epochs   = epochs   or config.DL_EPOCHS
     log      = send_log      or print
     progress = send_progress or (lambda p: None)
 
-    class CB(Callback):
+    # ── Callback log từng epoch ───────────────────────────────
+    class EpochLogger(tf.keras.callbacks.Callback):
         def on_epoch_end(self, epoch, logs=None):
             progress(min(int((epoch + 1) / epochs * 90) + 5, 95))
             lr = float(self.model.optimizer.learning_rate)
-            log(f"      epoch {epoch+1}/{epochs}  "
-                f"val_loss={logs.get('val_loss', 0):.5f}  lr={lr:.2e}")
+            log(f"      Epoch {epoch+1:>3}/{epochs}  "
+                f"train={logs.get('loss', 0):.5f}  "
+                f"val={logs.get('val_loss', 0):.5f}  "
+                f"lr={lr:.1e}")
 
     model = build_bigru((Xs_tr.shape[1], Xs_tr.shape[2]))
-    log(f"    BiGRU: {model.count_params():,} params")
+    log(f"    BiGRU: {model.count_params():,} tham số")
 
-    hist = model.fit(
+    history = model.fit(
         Xs_tr, ys_tr,
-        validation_data=(Xs_vl, ys_vl),
-        epochs=epochs,
-        batch_size=32,
-        verbose=0,
-        callbacks=[
-            EarlyStopping(monitor="val_loss", patience=config.DL_PATIENCE,
-                          restore_best_weights=True, verbose=0),
-            ReduceLROnPlateau(monitor="val_loss", factor=0.5,
-                              patience=5, min_lr=1e-6, verbose=0),
-            CB(),
+        validation_data = (Xs_vl, ys_vl),
+        epochs          = epochs,
+        batch_size      = config.DL_BATCH_SIZE,
+        verbose         = 0,
+        callbacks       = [
+            tf.keras.callbacks.EarlyStopping(
+                monitor="val_loss", patience=config.DL_PATIENCE,
+                restore_best_weights=True, verbose=0
+            ),
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor="val_loss", factor=0.5,
+                patience=5, min_lr=1e-6, verbose=0
+            ),
+            EpochLogger(),
         ],
     )
-    log(f"    ✓ BiGRU dừng ở epoch {len(hist.history['loss'])}/{epochs}")
-    return model, hist
+
+    stopped = len(history.history["loss"])
+    best_ep = int(np.argmin(history.history["val_loss"])) + 1
+    log(f"    ✓ BiGRU  dừng ep {stopped}/{epochs}  |  best val ep {best_ep}")
+    return model, history
 
 
-# ════════════════════════════════════════════════════════════
-#  6. ENSEMBLE
-# ════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════
+#  4. ENSEMBLE (Optuna tìm trọng số)
+# ════════════════════════════════════════════════════════════════
 
 def ensemble_predict(predictions: dict, weights: dict = None) -> np.ndarray:
     """
-    Kết hợp dự báo nhiều model theo trọng số.
-    Tự động căn chỉnh độ dài về min.
-    weights=None → trọng số bằng nhau.
-    Trả về float (round đến hàng đơn vị) thay vì int để giữ độ chính xác.
+    Kết hợp dự báo nhiều model theo trọng số có trọng số.
+    Tự động căn chỉnh độ dài về min_len (an toàn khi các pred khác nhau).
+
+    Parameters
+    ----------
+    predictions : dict   {model_name: np.ndarray}
+    weights     : dict   {model_name: float} — None = trọng số bằng nhau
+
+    Returns
+    -------
+    np.ndarray   Dự báo ensemble (float, round đến hàng đơn vị)
     """
     names   = list(predictions.keys())
     arrs    = [np.array(predictions[n]) for n in names]
@@ -357,19 +273,29 @@ def ensemble_predict(predictions: dict, weights: dict = None) -> np.ndarray:
         w = np.ones(len(arrs)) / len(arrs)
     else:
         w_raw = np.array([weights.get(n, 1.0) for n in names])
-        w = w_raw / w_raw.sum()
+        w     = w_raw / w_raw.sum()
 
     pred = sum(wi * a for wi, a in zip(w, arrs))
-    return np.round(pred, 0)   # float, round đến hàng đơn vị
+    return np.round(pred, 0)   # float để giữ precision, round đến đơn vị
 
 
 def find_optimal_ensemble_weights(predictions: dict,
                                    y_true: np.ndarray,
-                                   n_trials: int = 100,
+                                   n_trials: int = config.ENSEMBLE_TRIALS,
                                    send_log=None) -> dict:
     """
-    Optuna tìm trọng số tối ưu minimize RMSE ensemble.
-    Tăng n_trials lên 100 để search space 5 chiều đủ coverage.
+    Optuna tìm bộ trọng số tối ưu cho Ensemble bằng cách minimize RMSE.
+
+    Với N model → không gian N chiều liên tục [0, 1].
+    Sau mỗi trial, Optuna normalize tổng trọng số = 1.
+
+    Parameters
+    ----------
+    n_trials : int   Số lần thử (mặc định 100 — phù hợp ≥ 3 model)
+
+    Returns
+    -------
+    dict   {model_name: weight}  tổng = 1.0
     """
     log   = send_log or print
     names = list(predictions.keys())
@@ -379,10 +305,10 @@ def find_optimal_ensemble_weights(predictions: dict,
     y     = y_true[-n:]
 
     def objective(trial):
-        w = np.array([trial.suggest_float(nm, 0.0, 1.0) for nm in names])
+        w = np.array([trial.suggest_float(name, 0.0, 1.0) for name in names])
         if w.sum() < 1e-6:
             return 1e9
-        w /= w.sum()
+        w   /= w.sum()
         pred = sum(wi * a for wi, a in zip(w, arrs))
         return float(np.sqrt(np.mean((y - pred) ** 2)))
 
@@ -393,15 +319,17 @@ def find_optimal_ensemble_weights(predictions: dict,
     total = sum(raw.values())
     best  = {n: round(v / total, 3) for n, v in raw.items()}
 
-    log(f"    ✓ Ensemble weights: {best}  RMSE={study.best_value:.0f}")
+    log(f"    ✓ Weights: {best}")
+    log(f"       RMSE ensemble = {study.best_value:.0f}")
     return best
 
 
-# ════════════════════════════════════════════════════════════
-#  HELPER: lưu / load model
-# ════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════
+#  HELPER: Lưu / Load model Keras
+# ════════════════════════════════════════════════════════════════
 
-def save_model(model, name: str):
+def save_model(model, name: str) -> str:
+    """Lưu Keras model vào thư mục models/."""
     os.makedirs(config.MODELS_DIR, exist_ok=True)
     path = os.path.join(config.MODELS_DIR, f"{name}.keras")
     model.save(path)
@@ -409,7 +337,7 @@ def save_model(model, name: str):
 
 
 def load_model(name: str):
+    """Load Keras model từ thư mục models/."""
     import tensorflow as tf
-    return tf.keras.models.load_model(
-        os.path.join(config.MODELS_DIR, f"{name}.keras")
-    )
+    path = os.path.join(config.MODELS_DIR, f"{name}.keras")
+    return tf.keras.models.load_model(path)

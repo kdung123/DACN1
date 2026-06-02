@@ -348,7 +348,17 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
     </div>
   </div>
 
-  <!-- Loss curve DL models -->\n  <div class=\"card hidden\" id=\"lossCard\">\n    <div class=\"card-head\"><span class=\"ctitle\">Training History — Loss Curve (DL Models)</span>\n      <span style=\"font-size:11px;color:var(--muted);margin-left:8px\">★ = val_loss tốt nhất &nbsp;|&nbsp; đường đứt = epoch dừng</span>\n    </div>\n    <div class=\"card-body\">\n      <div style=\"display:flex;gap:8px;flex-wrap:wrap\" id=\"lossChartWrap\"></div>\n    </div>\n  </div>\n\n  <!-- Kết quả -->
+  <!-- Loss curve DL models -->
+  <div class="card hidden" id="lossCard">
+    <div class="card-head"><span class="ctitle">Training History — Loss Curve (DL Models)</span>
+      <span style="font-size:11px;color:var(--muted);margin-left:8px">★ = val_loss tốt nhất &nbsp;|&nbsp; đường đứt = epoch dừng</span>
+    </div>
+    <div class="card-body">
+      <div style="display:flex;gap:8px;flex-wrap:wrap" id="lossChartWrap"></div>
+    </div>
+  </div>
+
+  <!-- Kết quả -->
   <div class="card hidden" id="resCard">
     <div class="card-head"><span class="ctitle">Kết quả so sánh mô hình</span>
       <span style="font-size:11px;color:var(--muted);margin-left:8px">
@@ -445,10 +455,8 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 
 <script>
 const MODELS=[
-  {id:'AutoARIMA',     label:'Auto ARIMA',     color:'#d97706'},
   {id:'Ridge(Optuna)', label:'Ridge (Optuna)', color:'#2563eb'},
   {id:'RF(Optuna)',    label:'RF (Optuna)',    color:'#16a34a'},
-  {id:'LSTM+Attn',     label:'LSTM+Attention', color:'#7c3aed'},
   {id:'BiGRU',         label:'BiGRU',          color:'#db2777'},
   {id:'Ensemble',      label:'Ensemble',       color:'#0891b2'},
 ];
@@ -616,9 +624,12 @@ function startTrain(){
 
 function log(msg,cls=''){
   const c=document.getElementById('console');
+  // Replace literal \n sequences with real newlines
+  const text = msg.replace(/\\n/g,'\n');
   const s=document.createElement('span');
   if(cls) s.className='log-'+cls;
-  s.textContent=msg+'\n'; c.appendChild(s); c.scrollTop=c.scrollHeight;
+  s.textContent=text+'\n';
+  c.appendChild(s); c.scrollTop=c.scrollHeight;
 }
 
 function setProg(id,pct,done=false){
@@ -955,6 +966,10 @@ function renderPredChart() {
   document.getElementById('predCard').classList.remove('hidden');
   buildModelToggles();
 
+  // Labels = toàn bộ test dates (trục X dùng actual làm chuẩn)
+  const labels = actualDates.map(d => d.slice(5));
+  const nTotal = actualDates.length;
+
   const datasets = [{
     label: 'Thực tế', _modelId: 'actual',
     data: actualVals,
@@ -965,18 +980,19 @@ function renderPredChart() {
 
   Object.entries(predData).forEach(([id, pd]) => {
     const m = MODELS.find(x => x.id === id); if (!m) return;
-    const n = Math.min(actualVals.length, pd.values.length);
+    const n = Math.min(nTotal, pd.values.length);
+    // Pad null ở đầu để align đúng vị trí cuối timeline
+    const padded = Array(nTotal - n).fill(null).concat(pd.values.slice(-n));
     datasets.push({
       label: m.label, _modelId: id,
-      data: pd.values.slice(-n),
+      data: padded,
       borderColor: m.color, borderWidth: 1.8,
       backgroundColor: hexToRgba(m.color, 0.05),
       pointRadius: 0, tension: .3, fill: false,
       borderDash: [5, 3], order: 1, hidden: false,
+      spanGaps: false,
     });
   });
-
-  const labels = actualDates.slice(-datasets[0].data.length).map(d => d.slice(5));
 
   if (predChart) predChart.destroy();
   predChart = new Chart(document.getElementById('predChart').getContext('2d'), {
