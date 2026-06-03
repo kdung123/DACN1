@@ -250,6 +250,24 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
         <span style="font-size:11px;color:var(--muted)">)</span>
       </div>
     </div>
+
+    <div class="param-item">
+      <label>Số năm dữ liệu train</label>
+      <input type="range" id="dataYears" min="1" max="10" value="5" step="1"
+             oninput="syncInput('dataYears','dataYearsNum'); sv('dataYearsV',this.value+' năm'); updateYearsHint(this.value)">
+      <div style="display:flex;align-items:center;gap:8px;margin-top:3px">
+        <span class="pval" id="dataYearsV">5 năm</span>
+        <span style="font-size:11px;color:var(--muted)">(</span>
+        <input type="number" id="dataYearsNum" min="1" max="10" value="5"
+          oninput="syncSlider('dataYearsNum','dataYears'); sv('dataYearsV',this.value+' năm'); updateYearsHint(this.value)"
+          style="width:50px;padding:2px 6px;border:1px solid var(--border);border-radius:4px;
+          font-size:12px;font-family:var(--mono);color:var(--blue);font-weight:600">
+        <span style="font-size:11px;color:var(--muted)">năm)</span>
+      </div>
+      <div id="yearsHint" style="font-size:10px;color:var(--muted);margin-top:4px">
+        ≈ 1250 phiên  →  Train 875 · Val 187 · Test 188
+      </div>
+    </div>
   </div>
   <div class="panel" style="border-bottom:none;padding-bottom:16px">
     <button class="btn-train" id="btnTrain" onclick="startTrain()">
@@ -605,6 +623,7 @@ function startTrain(){
       seq_len:  getParamVal('seqLen',  'seqLenNum'),
       epochs:   getParamVal('epochs',  'epochsNum'),
       n_trials: getParamVal('nTrials', 'nTrialsNum'),
+      years:    getParamVal('dataYears','dataYearsNum'),
     })
   }).then(res=>{
     const reader=res.body.getReader(), dec=new TextDecoder();
@@ -620,6 +639,16 @@ function startTrain(){
     }
     pump();
   }).catch(e=>{log('❌ Lỗi: '+e,'err');trainDone();});
+}
+
+// Cập nhật hint số phiên ước tính khi người dùng chọn số năm
+function updateYearsHint(years){
+  const sessions = Math.round(years * 250);   // ~250 phiên/năm
+  const train    = Math.round(sessions * 0.70);
+  const val      = Math.round(sessions * 0.15);
+  const test     = sessions - train - val;
+  document.getElementById('yearsHint').textContent =
+    `≈ ${sessions} phiên  →  Train ${train} · Val ${val} · Test ${test}`;
 }
 
 function log(msg,cls=''){
