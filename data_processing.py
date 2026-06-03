@@ -21,7 +21,7 @@
 
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 import config
 
@@ -91,7 +91,7 @@ def preprocess(df: pd.DataFrame, ticker: str = "") -> pd.DataFrame:
     df[existing] = df[existing].ffill().bfill()
 
     # ── 4–5. Xóa dòng không hợp lệ ───────────────────────────
-    df = df.dropna(subset=[config.TARGET_COLUMN]).reset_index(drop=True)
+    df = df.dropna(subset=["Close"]).reset_index(drop=True)
     df = df.drop_duplicates(subset=[config.DATE_COLUMN]).reset_index(drop=True)
 
     print(f"  [{ticker}] {len(df)} phiên  "
@@ -131,8 +131,9 @@ def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
                 Vol_Ratio     — Volume(T-1)/VolMA5(T-1)
     """
     df        = df.copy()
-    target    = config.TARGET_COLUMN
-
+    target    = "Close"
+    df["Target"] = df["Close"].shift(-1)  # Target là Close của ngày hôm sau 
+    
     # Nguồn gốc của TẤT CẢ features: Close đã shift 1 ngày
     # → Tại ngày T, close_lag = Close(T-1) — không có thông tin của T
     close_lag = df[target].shift(1)
@@ -215,8 +216,18 @@ def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_feature_columns(df: pd.DataFrame) -> list:
-    """Trả về danh sách cột feature (bỏ Date, ticker)."""
-    exclude = {config.DATE_COLUMN, "ticker"}
+    """Trả về danh sách cột feature (bỏ Date, ticker, Target, Close)."""
+    exclude = {config.DATE_COLUMN, "ticker", "Target", "Close", "Return_target"}
+    return [c for c in df.columns if c not in exclude]
+
+
+def get_ridge_feature_columns(df: pd.DataFrame) -> list:
+    """Trả về danh sách cột feature dành cho Ridge (bỏ các cột target và metadata).
+
+    Loại bỏ cột ngày, ticker, Target (Close tương lai), Close hiện tại và Return_target
+    (return là biến mục tiêu cho Ridge).
+    """
+    exclude = {config.DATE_COLUMN, "ticker", "Target", "Close", "Return_target"}
     return [c for c in df.columns if c not in exclude]
 
 
@@ -251,33 +262,27 @@ def split_data(df: pd.DataFrame):
 
 
 # ════════════════════════════════════════════════════════════════
-#  BƯỚC 5 — SCALE
-#  MinMaxScaler cho features (X) và target (y)
-#
-#  Quy tắc bắt buộc:
-#    scaler.fit() CHỈ trên train — không dùng thông tin val/test
-#    scaler.transform() cho val và test — chỉ áp dụng scale đã học
-#
-#  Lý do:
-#    Fit scaler trên val/test = model biết phân phối dữ liệu tương lai
-#    → data leakage → metric ảo tốt hơn thực tế
+#  BƯỚC 5 — SCALE cho BiGRU / RF
+#  MinMaxScaler — fit CHỈ trên train
 # ════════════════════════════════════════════════════════════════
 
 def scale_data(train, val, test, features):
     """
-    Chuẩn hóa X và y về [0, 1] bằng MinMaxScaler.
+    MinMaxScaler cho X (features) và y (Close) — dùng cho BiGRU & RF.
+
+    scaler.fit() CHỈ trên train.
+    Val và Test chỉ được .transform() — không fit lại.
 
     Parameters
     ----------
-    features : list  Tất cả cột feature (gồm cả target Close)
+    features : list  Cột feature (từ get_feature_columns, KHÔNG có Return_target)
 
     Returns
     -------
     X_train, y_train, X_val, y_val, X_test, y_test, scaler_X, scaler_y
-      Trong đó scaler_X và scaler_y chỉ được fit trên train.
     """
-    target = config.TARGET_COLUMN
-    X_cols = [f for f in features if f != target]
+    target = "Target" 
+    X_cols = [f for f in features if f not in ["Close", "Target"]]
 
     # Fit ONLY trên train
     scaler_X = MinMaxScaler()
@@ -293,6 +298,85 @@ def scale_data(train, val, test, features):
     y_test = scaler_y.transform(test[[target]]).ravel()
 
     return X_train, y_train, X_val, y_val, X_test, y_test, scaler_X, scaler_y
+
+
+# ════════════════════════════════════════════════════════════════
+#  BƯỚC 5b — SCALE cho Ridge (dự báo Return)
+#  StandardScaler — phù hợp hơn MinMax cho Return (có âm, gần 0)
+# ════════════════════════════════════════════════════════════════
+
+
+
+def scale_data_ridge(train, val, test):
+    """
+    Scale riêng cho Ridge — dự báo Return(T+1) thay vì Close(T+1).
+
+    Tại sao StandardScaler thay vì MinMaxScaler?
+    ─────────────────────────────────────────────
+    Return là % thay đổi, thường nằm trong [-5%, +5%].
+    MinMaxScaler dễ bị ảnh hưởng bởi outlier (spike ±10%).
+    StandardScaler (mean=0, std=1) ổn định hơn cho phân phối này.
+
+    Target: Return_target = (Close(T+1) - Close(T)) / Close(T)
+
+    Returns
+    -------
+    X_train_r, y_train_r,    — features và Return target của train
+    X_val_r,   y_val_r,      — features và Return target của val
+    X_test_r,                — features của test (không có y vì chưa biết)
+    close_val,               — Close thực tế của val (để convert ngược)
+    close_test,              — Close thực tế của test (để convert ngược)
+    scaler_Xr,               — scaler đã fit trên train (dùng để transform)
+    scaler_yr                — scaler Return đã fit trên train
+    """
+
+    ridge_features = get_ridge_feature_columns(train)
+
+    scaler_Xr = StandardScaler()
+    scaler_yr = StandardScaler()
+
+    # Fit CHỈ trên train
+    X_train_r = scaler_Xr.fit_transform(train[ridge_features])
+    y_train_r = scaler_yr.fit_transform(
+        train[["Return_target"]]
+    ).ravel()
+
+    # Transform val và test
+    X_val_r  = scaler_Xr.transform(val[ridge_features])
+    y_val_r  = scaler_yr.transform(val[["Return_target"]]).ravel()
+    X_test_r = scaler_Xr.transform(test[ridge_features])
+
+    # Giữ lại giá Close thực tế để convert Return → Close sau predict
+    # close_val[i]  = Close(T)  → Close_pred(T+1) = close_val[i]  × (1 + return_pred[i])
+    # close_test[i] = Close(T)  → Close_pred(T+1) = close_test[i] × (1 + return_pred[i])
+    close_val  = val[config.TARGET_COLUMN].values
+    close_test = test[config.TARGET_COLUMN].values
+
+    return (X_train_r, y_train_r,
+            X_val_r,   y_val_r,
+            X_test_r,
+            close_val, close_test,
+            scaler_Xr, scaler_yr)
+
+
+def return_to_price(returns: np.ndarray, close_base: np.ndarray) -> np.ndarray:
+    """
+    Convert dự báo Return về giá tuyệt đối.
+
+    Công thức:
+        Close_pred(T+1) = Close(T) × (1 + Return_pred(T+1))
+
+    Parameters                                  
+    ----------
+    returns    : np.ndarray  Return dự báo (chưa inverse_transform)
+    close_base : np.ndarray  Close(T) — giá ngày hiện tại làm cơ sở
+
+    Returns
+    -------
+    np.ndarray  Giá Close dự báo (VNĐ)
+    """
+    n = min(len(returns), len(close_base))
+    return close_base[-n:] * (1 + returns[-n:])
 
 
 # ════════════════════════════════════════════════════════════════

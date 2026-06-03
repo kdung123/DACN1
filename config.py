@@ -42,7 +42,7 @@ VN30_TICKERS = [
 # ════════════════════════════════════════════════════════════════
 
 DATE_COLUMN   = "Date"
-TARGET_COLUMN = "Close"                                    # cột cần dự báo
+TARGET_COLUMN = "Target"                                    # cột cần dự báo
 OHLCV_COLS    = ["Open", "High", "Low", "Close", "Volume"] # tất cả cột giá
 
 
@@ -64,7 +64,7 @@ TEST_RATIO  = 0.15   # 15% — đánh giá cuối cùng (chỉ dùng 1 lần)
 # ════════════════════════════════════════════════════════════════
 
 # Lag features: Close của N ngày trước
-LAG_WINDOWS = [1, 2, 3, 5, 10]
+LAG_WINDOWS = [3, 5, 10]
 
 # Moving average windows (SMA & EMA)
 MA_WINDOWS  = [5, 10, 20, 50]

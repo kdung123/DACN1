@@ -347,52 +347,64 @@ def api_train():
             val_preds      = {}   # model_id → np.ndarray pred trên VAL
                                   # ↑ dùng để tìm Ensemble weights mà không nhìn test
 
+            # ── Scale riêng cho Ridge (dự báo Return) ────
+            # Ridge dùng StandardScaler + target là Return(T+1)
+            # thay vì MinMaxScaler + target là Close(T+1)
+            # → tránh Lag_1 dominant → model học pattern thật
+            (X_train_r, y_train_r,
+             X_val_r,   y_val_r,
+             X_test_r,
+             close_val, close_test,
+             scaler_Xr, scaler_yr) = dp.scale_data_ridge(train, val, test)
+
             # ── Chuẩn bị sequences cho BiGRU ─────────────
-            # make_sequences tạo sliding window (seq_len, n_features)
-            # Output ngắn hơn input đúng seq_len phiên
             dl_ready = False
             if any(m in models for m in ["BiGRU", "Ensemble"]):
                 Xs_tr, ys_tr = dp.make_sequences(X_train, y_train, seq_len)
                 Xs_vl, ys_vl = dp.make_sequences(X_val,   y_val,   seq_len)
                 Xs_te, _     = dp.make_sequences(X_test,  y_test,  seq_len)
-
-                # y và dates của test phải căn chỉnh với sequence offset
-                y_te_seq = y_test_real[seq_len:]
-                td_seq   = test_dates[seq_len:]
-
-                # Cần tối thiểu 10 samples để train DL
-                dl_ready = len(Xs_tr) >= 10
+                y_te_seq     = y_test_real[seq_len:]
+                td_seq       = test_dates[seq_len:]
+                dl_ready     = len(Xs_tr) >= 10
                 if not dl_ready:
                     log("      ⚠ Dữ liệu quá ít cho BiGRU, bỏ qua DL models.")
 
             # ════════════════════════════════════════════════
             #  MODEL 1 — RIDGE REGRESSION + OPTUNA
-            #  Tìm alpha (L2 regularization) tối ưu trên val set
-            #  Ưu điểm: ổn định, không overfit, train rất nhanh
+            #
+            #  Target: Return(T+1) = (Close(T+1)-Close(T))/Close(T)
+            #  → Sau predict: Close_pred = Close(T) × (1 + Return_pred)
+            #
+            #  Tại sao đổi target?
+            #    Ridge cũ dự báo Close(T+1) → Lag_1=Close(T-1) dominant
+            #    → ŷ(T) ≈ Close(T-1) → đường bị lệch T+1
+            #    Ridge mới dự báo Return → Lag_1 không còn dominant
+            #    → model buộc phải học pattern thực sự của thị trường
             # ════════════════════════════════════════════════
             if "Ridge(Optuna)" in models:
                 mid = "Ridge(Optuna)"
-                log(f"\n  ┌─ {mid}")
+                log(f"\n  ┌─ {mid}  [target: Return(T+1) → convert về Close]")
                 log(f"  │  Optuna tìm alpha tối ưu ({n_trials} trials)...")
                 progress(mid, 5)
                 try:
                     model, best_alpha = mi.train_ridge_optuna(
-                        X_train, y_train, X_val, y_val,
+                        X_train_r, y_train_r, X_val_r, y_val_r,
                         n_trials=n_trials,
                         send_log=lambda m: log(f"  │  {m}"),
                     )
 
-                    # Predict trên TEST (đánh giá cuối cùng)
-                    pred = scaler_y.inverse_transform(
-                        model.predict(X_test).reshape(-1, 1)
+                    # Predict Return trên TEST rồi convert về giá Close
+                    return_pred_test = scaler_yr.inverse_transform(
+                        model.predict(X_test_r).reshape(-1, 1)
                     ).ravel()
+                    pred = dp.return_to_price(return_pred_test, close_test)
 
-                    # Predict trên VAL (dùng để tìm Ensemble weights)
-                    vp = scaler_y.inverse_transform(
-                        model.predict(X_val).reshape(-1, 1)
+                    # Predict Return trên VAL rồi convert về giá Close
+                    return_pred_val = scaler_yr.inverse_transform(
+                        model.predict(X_val_r).reshape(-1, 1)
                     ).ravel()
+                    vp = dp.return_to_price(return_pred_val, close_val)
 
-                    # Lưu kết quả
                     r = _make_result(mid, y_test_real, pred, test_dates)
                     results[mid]        = r
                     predictions[mid]    = {"dates": test_dates,

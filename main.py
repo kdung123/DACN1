@@ -92,19 +92,30 @@ def run_pipeline(ticker: str,
     preds_val    = {}   # pred trên VAL   — dùng để tìm trọng số Ensemble
     y_val_real   = val[target].values
 
-    # ── [5a] Ridge Regression ─────────────────────────────────
-    print("\n  ▶ Ridge Regression + Optuna")
+    # ── Scale riêng cho Ridge ────────────────────────────────
+    # Target: Return(T+1) thay vì Close(T+1) để tránh Lag_1 dominant
+    (X_train_r, y_train_r,
+     X_val_r,   y_val_r,
+     X_test_r,
+     close_val, close_test,
+     scaler_Xr, scaler_yr) = dp.scale_data_ridge(train, val, test)
+
+    # ── [5a] Ridge Regression (target: Return) ────────────────
+    print("\n  ▶ Ridge Regression + Optuna  [target: Return(T+1)]")
     try:
         ridge_model, best_alpha = m.train_ridge_optuna(
-            X_train, y_train, X_val, y_val
+            X_train_r, y_train_r, X_val_r, y_val_r
         )
-        ridge_pred = scaler_y.inverse_transform(
-            ridge_model.predict(X_test).reshape(-1, 1)
+        # Predict Return → convert về Close
+        return_pred_test = scaler_yr.inverse_transform(
+            ridge_model.predict(X_test_r).reshape(-1, 1)
         ).ravel()
-        # Val pred — dùng để tìm trọng số Ensemble (không đụng test)
-        ridge_pred_val = scaler_y.inverse_transform(
-            ridge_model.predict(X_val).reshape(-1, 1)
+        ridge_pred = dp.return_to_price(return_pred_test, close_test)
+
+        return_pred_val = scaler_yr.inverse_transform(
+            ridge_model.predict(X_val_r).reshape(-1, 1)
         ).ravel()
+        ridge_pred_val = dp.return_to_price(return_pred_val, close_val)
 
         results.append(ev.evaluate(y_test_real, ridge_pred, "Ridge(Optuna)"))
         predictions["Ridge(Optuna)"] = ridge_pred
