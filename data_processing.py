@@ -133,6 +133,7 @@ def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
     df        = df.copy()
     target    = "Close"
     df["Target"] = df["Close"].shift(-1)  # Target là Close của ngày hôm sau 
+    df["Return_target"] = (df["Close"].shift(-1) - df["Close"]) / (df["Close"] + 1e-9) # Return của ngày kế tiếp
     
     # Nguồn gốc của TẤT CẢ features: Close đã shift 1 ngày
     # → Tại ngày T, close_lag = Close(T-1) — không có thông tin của T
@@ -349,8 +350,8 @@ def scale_data_ridge(train, val, test):
     # Giữ lại giá Close thực tế để convert Return → Close sau predict
     # close_val[i]  = Close(T)  → Close_pred(T+1) = close_val[i]  × (1 + return_pred[i])
     # close_test[i] = Close(T)  → Close_pred(T+1) = close_test[i] × (1 + return_pred[i])
-    close_val  = val[config.TARGET_COLUMN].values
-    close_test = test[config.TARGET_COLUMN].values
+    close_val  = val["Close"].values
+    close_test = test["Close"].values
 
     return (X_train_r, y_train_r,
             X_val_r,   y_val_r,

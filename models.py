@@ -74,7 +74,7 @@ def train_ridge_optuna(X_train, y_train, X_val, y_val,
 
     # ── Optuna tìm alpha tốt nhất ────────────────────────────
     def objective(trial):
-        alpha = trial.suggest_float("alpha", 1e-3, 100, log=True)
+        alpha = trial.suggest_float("alpha", 1e-3, 10, log=True)
         model = Ridge(alpha=alpha).fit(X_train, y_train)
         return float(mean_squared_error(y_val, model.predict(X_val)))
 
